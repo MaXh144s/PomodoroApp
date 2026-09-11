@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pomodoro</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<main class="app">
+
+  <!-- ===================== TELA INICIAL ===================== -->
+  <section id="view-home" class="view">
+    <header class="home-header">
+      <h1>Pomodoro</h1>
+      <button id="btn-new" class="fab" title="Novo temporizador" aria-label="Novo temporizador">+</button>
+    </header>
+
+    <div class="card summary-card">
+      <p class="summary-label">Hoje</p>
+      <p id="home-total-time" class="summary-big">0min</p>
+      <p id="home-motivational" class="summary-sub">Comece seu primeiro ciclo de estudo hoje!</p>
+
+      <div class="summary-grid">
+        <div>
+          <span id="home-cycles" class="summary-number">0</span>
+          <span class="summary-caption">ciclos completos</span>
+        </div>
+        <div>
+          <span id="home-sessions" class="summary-number">0</span>
+          <span class="summary-caption">sessões</span>
+        </div>
+      </div>
+      <p id="home-equivalence" class="summary-equivalence"></p>
+    </div>
+
+    <div id="home-history" class="card history-card" hidden>
+      <p class="card-title">Histórico</p>
+      <ul id="home-history-list" class="history-list"></ul>
+    </div>
+  </section>
+
+  <!-- ===================== CONFIGURAÇÃO ===================== -->
+  <section id="view-config" class="view" hidden>
+    <header class="view-header">
+      <button id="btn-config-back" class="btn-icon" aria-label="Voltar">←</button>
+      <h2>Novo temporizador</h2>
+    </header>
+
+    <form id="config-form" class="card config-form">
+      <label class="field">
+        <span>Tempo de estudo (min)</span>
+        <input type="number" id="input-study" min="1" step="1" value="25" required>
+      </label>
+
+      <label class="field">
+        <span>Tempo de descanso (min)</span>
+        <input type="number" id="input-rest" min="1" step="1" value="5" required>
+      </label>
+
+      <p class="field-hint">Proporção padrão 5:1 (o descanso é sugerido automaticamente, mas você pode ajustar).</p>
+
+      <button type="submit" class="btn btn-primary">Iniciar estudo</button>
+    </form>
+  </section>
+
+  <!-- ===================== CRONÔMETRO (ESTUDO / DESCANSO) ===================== -->
+  <section id="view-timer" class="view" hidden>
+    <header class="view-header">
+      <button id="btn-timer-home" class="btn-icon" aria-label="Início">←</button>
+      <span id="timer-state" class="state-badge">ESTUDO</span>
+    </header>
+
+    <div class="timer-display">
+      <svg class="progress-ring" viewBox="0 0 200 200">
+        <circle class="progress-ring-bg" cx="100" cy="100" r="90"></circle>
+        <circle id="progress-ring-fg" class="progress-ring-fg" cx="100" cy="100" r="90"></circle>
+      </svg>
+      <div class="timer-center">
+        <span id="timer-remaining" class="timer-time">25:00</span>
+        <span id="timer-configured" class="timer-total">de 25min</span>
+      </div>
+    </div>
+
+    <p id="timer-cycle-info" class="cycle-info"></p>
+
+    <div class="timer-controls">
+      <button id="btn-toggle" class="btn btn-primary btn-large">Pausar</button>
+      <button id="btn-reset" class="btn btn-secondary">Reiniciar</button>
+    </div>
+
+    <div class="time-adjust">
+      <button class="btn btn-chip" data-delta="-5">-5min</button>
+      <button class="btn btn-chip" data-delta="-1">-1min</button>
+      <button class="btn btn-chip" data-delta="1">+1min</button>
+      <button class="btn btn-chip" data-delta="5">+5min</button>
+    </div>
+
+    <p id="timer-today-total" class="today-total"></p>
+  </section>
+
+  <!-- ===================== ALERTA DE FIM DE CICLO ===================== -->
+  <section id="view-alert" class="view" hidden>
+    <div class="alert-box">
+      <p id="alert-icon" class="alert-icon">⏰</p>
+      <h2 id="alert-message">Estudo concluído! Hora de descansar.</h2>
+      <div class="alert-actions">
+        <button id="btn-stop-sound" class="btn btn-secondary">Parar som</button>
+        <button id="btn-skip-alert" class="btn btn-primary">Continuar agora</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

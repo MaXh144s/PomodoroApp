@@ -1,0 +1,394 @@
+:root {
+  --color-bg: #faf9f7;
+  --color-card: #ffffff;
+  --color-primary: #e2572b;
+  --color-primary-dark: #c8471f;
+  --color-rest: #2b8fe2;
+  --color-text: #2b2b2b;
+  --color-text-muted: #767676;
+  --color-border: #e9e5e0;
+  --radius: 16px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.app {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 24px 20px 48px;
+  min-height: 100vh;
+}
+
+.view[hidden] {
+  display: none;
+}
+
+/* ---------- Cartões e elementos genéricos ---------- */
+
+.card {
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-top: 16px;
+}
+
+.card-title {
+  margin: 0 0 12px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.btn {
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 12px 18px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.05s ease;
+}
+
+.btn:active {
+  transform: scale(0.97);
+}
+
+.btn-primary {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: var(--color-primary-dark);
+}
+
+.btn-secondary {
+  background: #f1efec;
+  color: var(--color-text);
+}
+
+.btn-large {
+  flex: 1;
+  padding: 16px;
+  font-size: 1.05rem;
+}
+
+.btn-icon {
+  background: transparent;
+  border: none;
+  font-size: 1.4rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  color: var(--color-text);
+}
+
+.btn-chip {
+  background: #f1efec;
+  color: var(--color-text);
+  padding: 10px 0;
+  border-radius: 10px;
+  flex: 1;
+  font-size: 0.9rem;
+}
+
+/* ---------- Tela inicial ---------- */
+
+.home-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.home-header h1 {
+  margin: 0;
+  font-size: 1.6rem;
+}
+
+.fab {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 1.8rem;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(226, 87, 43, 0.35);
+}
+
+.fab:active {
+  transform: scale(0.95);
+}
+
+.summary-card {
+  text-align: center;
+}
+
+.summary-label {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.summary-big {
+  font-size: 2.4rem;
+  font-weight: 700;
+  margin: 4px 0;
+}
+
+.summary-sub {
+  color: var(--color-text-muted);
+  margin: 0 0 16px;
+  font-size: 0.95rem;
+}
+
+.summary-grid {
+  display: flex;
+  justify-content: center;
+  gap: 32px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.summary-grid > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.summary-number {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.summary-caption {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.summary-equivalence {
+  margin: 12px 0 0;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.history-list li {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.history-list li:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.history-date {
+  font-weight: 600;
+}
+
+.history-detail {
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+}
+
+/* ---------- Configuração ---------- */
+
+.view-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.view-header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: var(--color-text-muted);
+}
+
+.field input {
+  font-size: 1.1rem;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.field-hint {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  margin: -6px 0 0;
+}
+
+/* ---------- Cronômetro ---------- */
+
+.state-badge {
+  margin-left: auto;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--color-primary);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.8rem;
+  letter-spacing: 0.05em;
+}
+
+.state-badge.rest {
+  background: var(--color-rest);
+}
+
+.timer-display {
+  position: relative;
+  width: 260px;
+  height: 260px;
+  margin: 32px auto 8px;
+}
+
+.progress-ring {
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+
+.progress-ring-bg {
+  fill: none;
+  stroke: var(--color-border);
+  stroke-width: 10;
+}
+
+.progress-ring-fg {
+  fill: none;
+  stroke: var(--color-primary);
+  stroke-width: 10;
+  stroke-linecap: round;
+  stroke-dasharray: 565.48;
+  stroke-dashoffset: 0;
+  transition: stroke-dashoffset 0.2s linear, stroke 0.2s linear;
+}
+
+.state-badge.rest ~ .timer-display .progress-ring-fg,
+.timer-display.rest .progress-ring-fg {
+  stroke: var(--color-rest);
+}
+
+.timer-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.timer-time {
+  font-size: 2.6rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.timer-total {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+}
+
+.cycle-info {
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  min-height: 1.2em;
+}
+
+.timer-controls {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.time-adjust {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.today-total {
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  margin-top: 24px;
+}
+
+/* ---------- Alerta ---------- */
+
+#view-alert:not([hidden]) {
+  min-height: 80vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.alert-box {
+  text-align: center;
+}
+
+.alert-icon {
+  font-size: 3rem;
+  margin: 0 0 8px;
+}
+
+.alert-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 20px;
+}
+
+/* ---------- Responsivo ---------- */
+
+@media (max-width: 380px) {
+  .timer-display {
+    width: 220px;
+    height: 220px;
+  }
+  .timer-time {
+    font-size: 2.1rem;
+  }
+}
