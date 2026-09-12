@@ -162,9 +162,22 @@ export class PomodoroApp {
     this._persistSnapshotNow();
   }
 
-  /** Reinicia o ciclo de estudo atual do zero, sem contabilizar nada (seção 3). */
-  resetStudy() {
+  /**
+   * Reinicia o ciclo de estudo atual. O tempo já estudado até este ponto NÃO é
+   * perdido: é finalizado e salvo no histórico como uma sessão (igual ao que
+   * acontece ao trocar de configuração em configure()) antes de o cronômetro
+   * voltar ao tempo total configurado para uma nova tentativa.
+   */
+  async resetStudy() {
     this._requirePhase(Phase.STUDY);
+
+    const remaining = this._timer.getRemainingMs();
+    const configuredMs = this._timer.getTotalDurationMs();
+    const studiedMs = configuredMs - remaining;
+    const endTimestamp = Date.now();
+
+    await this._finalizeStudySession({ studiedMs, configuredMs, endTimestamp });
+
     this._timer.reset();
     this._studyStartTimestamp = Date.now();
     this._persistSnapshotNow();

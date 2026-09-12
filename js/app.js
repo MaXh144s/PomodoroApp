@@ -242,11 +242,12 @@ el.btnToggle.addEventListener('click', () => {
   updateToggleButtonLabel();
 });
 
-el.btnReset.addEventListener('click', () => {
+el.btnReset.addEventListener('click', async () => {
   const phase = app.getPhase();
-  if (phase === Phase.STUDY) app.resetStudy();
+  if (phase === Phase.STUDY) await app.resetStudy();
   else if (phase === Phase.REST) app.resetRest();
   updateToggleButtonLabel();
+  renderCycleInfo(); // reflete o "estudado hoje" já somando a sessão parcial recém-salva
 });
 
 el.timeAdjustButtons.forEach((btn) => {
