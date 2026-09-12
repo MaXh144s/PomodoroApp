@@ -265,6 +265,94 @@ body {
   margin: -6px 0 0;
 }
 
+.ratio-inputs {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ratio-input {
+  width: 80px;
+  flex: none;
+  text-align: center;
+}
+
+.ratio-divider {
+  font-weight: 700;
+  color: var(--color-text-muted);
+}
+
+/* ---------- Recorte de trecho do áudio (seletor tipo Instagram) ---------- */
+
+.trim-track {
+  position: relative;
+  height: 44px;
+  background: #f1efec;
+  border-radius: 8px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+
+.trim-waveform {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 3px;
+}
+
+.trim-waveform-bar {
+  flex: 1;
+  min-width: 2px;
+  border-radius: 2px;
+  background: var(--color-text-muted);
+  opacity: 0.55;
+}
+
+.trim-waveform-bar--placeholder {
+  opacity: 0.3;
+  animation: trim-waveform-pulse 1s ease-in-out infinite alternate;
+}
+
+@keyframes trim-waveform-pulse {
+  from { opacity: 0.18; }
+  to { opacity: 0.32; }
+}
+
+.trim-window {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  width: 100%;
+  background: rgba(226, 87, 43, 0.32);
+  border: 2px solid var(--color-primary);
+  border-radius: 6px;
+  pointer-events: none;
+  transition: left 0.05s linear;
+  /* Faz a janela selecionada tingir de laranja as barras da forma de onda
+     que ficam por baixo dela, em vez de só cobri-las com um retângulo liso —
+     assim dá pra ver o desenho da música tanto dentro quanto fora do trecho escolhido. */
+  mix-blend-mode: multiply;
+}
+
+#pref-sound-trim-range {
+  width: 100%;
+  margin-top: 8px;
+  accent-color: var(--color-primary);
+}
+
+.field-warning {
+  font-size: 0.85rem;
+  color: var(--color-primary-dark);
+  background: #fdece6;
+  border: 1px solid rgba(226, 87, 43, 0.25);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 0;
+}
+
 /* ---------- Cronômetro ---------- */
 
 .state-badge {

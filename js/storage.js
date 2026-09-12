@@ -16,6 +16,8 @@ export const STORAGE_KEYS = Object.freeze({
   SESSIONS: 'pomodoro:sessions',       // histórico de sessões concluídas
   TIMER_SNAPSHOT: 'pomodoro:timerSnapshot', // snapshot do CountdownTimer em andamento
   APP_STATE: 'pomodoro:appState',      // estado da máquina de estados (fase atual, etc.)
+  PREFERENCES: 'pomodoro:preferences', // preferências do usuário (proporção padrão e duração inicial sugerida)
+  CUSTOM_SOUND: 'pomodoro:customSound', // toque customizado (dataURL de áudio) escolhido pelo usuário para o alerta
 });
 
 /**
@@ -186,6 +188,31 @@ export async function loadAppState() {
 /** @param {object} appState */
 export async function saveAppState(appState) {
   return storage.set(STORAGE_KEYS.APP_STATE, appState);
+}
+
+/** @returns {Promise<object|null>} preferências salvas (ou null se o usuário nunca configurou) */
+export async function loadPreferences() {
+  return storage.get(STORAGE_KEYS.PREFERENCES);
+}
+
+/** @param {object} preferences */
+export async function savePreferences(preferences) {
+  return storage.set(STORAGE_KEYS.PREFERENCES, preferences);
+}
+
+/** @returns {Promise<{name: string, dataUrl: string}|null>} toque customizado salvo (ou null se estiver usando o beep padrão) */
+export async function loadCustomSound() {
+  return storage.get(STORAGE_KEYS.CUSTOM_SOUND);
+}
+
+/** @param {{name: string, dataUrl: string}} sound */
+export async function saveCustomSound(sound) {
+  return storage.set(STORAGE_KEYS.CUSTOM_SOUND, sound);
+}
+
+/** Remove o toque customizado, voltando ao beep padrão gerado pelo app. */
+export async function clearCustomSound() {
+  return storage.remove(STORAGE_KEYS.CUSTOM_SOUND);
 }
 
 /** Apaga todos os dados do app (configurações, sessões, snapshots, estado). */

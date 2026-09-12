@@ -6,9 +6,18 @@
  * módulos já existentes.
  */
 
-import { PomodoroApp, Phase, computeDefaultRestMs } from './appstate.js';
+import { PomodoroApp, Phase } from './appstate.js';
 import { getTodaySummary, getFullHistorySummary, buildDailySummaryLabels, getLastNDaysSummary, getTodayDateKey } from './history.js';
 import { computeCycleProgress, formatDuration, formatCycleCount } from './cycles.js';
+import {
+  getDefaultPreferences,
+  computeRestMsForRatio,
+  buildRatioRecommendation,
+  clampAlarmDurationSeconds,
+  isValidAlarmDurationSeconds,
+} from './preferences.js';
+import { loadPreferences, savePreferences, loadCustomSound, saveCustomSound, clearCustomSound } from './storage.js';
+import { setAlertCustomSound, setAlertMaxDuration, playPreview, stopPreview, seekPreview, getAudioDuration, getAudioWaveform } from './sound.js';
 
 const RING_CIRCUMFERENCE = 2 * Math.PI * 90; // deve bater com o raio do SVG em style.css
 
@@ -34,6 +43,7 @@ const views = {
   timer: document.getElementById('view-timer'),
   alert: document.getElementById('view-alert'),
   chart: document.getElementById('view-chart'),
+  preferences: document.getElementById('view-preferences'),
 };
 
 const el = {
@@ -50,6 +60,29 @@ const el = {
   btnChartBack: document.getElementById('btn-chart-back'),
   chartBars: document.getElementById('chart-bars'),
   chartTotal: document.getElementById('chart-total'),
+
+  btnPreferences: document.getElementById('btn-preferences'),
+  btnPreferencesBack: document.getElementById('btn-preferences-back'),
+  preferencesForm: document.getElementById('preferences-form'),
+  prefStudyMinutes: document.getElementById('pref-study-minutes'),
+  prefRatioStudy: document.getElementById('pref-ratio-study'),
+  prefRatioRest: document.getElementById('pref-ratio-rest'),
+  prefWarning: document.getElementById('pref-warning'),
+  prefPresetButtons: Array.from(document.querySelectorAll('#preferences-form [data-preset-minutes]')),
+
+  prefAlarmDuration: document.getElementById('pref-alarm-duration'),
+  prefAlarmPresetButtons: Array.from(document.querySelectorAll('#preferences-form [data-preset-alarm-seconds]')),
+
+  prefSoundFile: document.getElementById('pref-sound-file'),
+  prefSoundCurrent: document.getElementById('pref-sound-current'),
+  prefSoundWarning: document.getElementById('pref-sound-warning'),
+  prefSoundTrim: document.getElementById('pref-sound-trim'),
+  trimWaveform: document.getElementById('trim-waveform'),
+  trimWindow: document.getElementById('trim-window'),
+  trimRange: document.getElementById('pref-sound-trim-range'),
+  trimRangeLabel: document.getElementById('trim-range-label'),
+  btnSoundPreview: document.getElementById('btn-sound-preview'),
+  btnSoundRemove: document.getElementById('btn-sound-remove'),
 
   btnConfigBack: document.getElementById('btn-config-back'),
   configForm: document.getElementById('config-form'),
@@ -86,6 +119,355 @@ const app = new PomodoroApp({
     // gravada (concluída ou finalizada por Reiniciar/nova configuração).
     refreshTodayBase();
   },
+});
+
+// ---------- Preferências ----------
+
+// Preferências atuais em memória (proporção estudo:descanso e tempo de
+// estudo padrão sugerido ao abrir "Novo temporizador"). Carregadas do
+// storage no boot; caem para o padrão do app (5:1, 25min) se o usuário
+// nunca tiver configurado nada.
+let currentPreferences = getDefaultPreferences();
+
+// Toque customizado atualmente salvo ({name, dataUrl}) ou null (beep padrão).
+let savedCustomSound = null;
+
+async function loadCurrentPreferences() {
+  const saved = await loadPreferences();
+  currentPreferences = saved || getDefaultPreferences();
+
+  savedCustomSound = await loadCustomSound();
+  setAlertCustomSound(
+    savedCustomSound ? savedCustomSound.dataUrl : null,
+    savedCustomSound ? (savedCustomSound.trimStartSeconds || 0) : 0
+  );
+  setAlertMaxDuration(currentPreferences.alarmDurationSeconds * 1000);
+}
+
+function renderPreferencesForm() {
+  el.prefStudyMinutes.value = currentPreferences.defaultStudyMinutes;
+  el.prefRatioStudy.value = currentPreferences.ratioStudyPart;
+  el.prefRatioRest.value = currentPreferences.ratioRestPart;
+  el.prefAlarmDuration.value = currentPreferences.alarmDurationSeconds;
+  updatePreferencesWarning();
+
+  pendingCustomSound = undefined; // usuário ainda não mexeu no som nesta visita ao formulário
+  pendingAudioDurationSeconds = null; // duração do áudio ativo, buscada sob demanda (ver _updateTrimUI)
+  pendingTrimStartSeconds = null; // início do trecho escolhido pelo usuário nesta visita, se houver
+  pendingWaveformPeaks = null; // forma de onda do áudio ativo, recalculada sob demanda
+  el.prefSoundFile.value = '';
+  el.prefSoundWarning.hidden = true;
+  _renderSoundStatus();
+  _updateTrimUI();
+}
+
+// Mostra em tempo real o aviso de "descanso desproporcional" (seção de
+// preferências): sempre que a proporção informada tiver o descanso
+// proporcionalmente maior que o padrão recomendado (5:1).
+function updatePreferencesWarning() {
+  const ratioStudyPart = Number(el.prefRatioStudy.value);
+  const ratioRestPart = Number(el.prefRatioRest.value);
+
+  if (!(ratioStudyPart > 0) || !(ratioRestPart > 0)) {
+    el.prefWarning.hidden = true;
+    return;
+  }
+
+  const message = buildRatioRecommendation(ratioStudyPart, ratioRestPart);
+  el.prefWarning.textContent = message || '';
+  el.prefWarning.hidden = !message;
+}
+
+// ---------- Toque customizado do alerta ----------
+
+const MAX_SOUND_FILE_BYTES = 2 * 1024 * 1024; // ~2MB: acima disso o localStorage pode recusar salvar
+
+// Estado do formulário de preferências para o som (só persiste ao salvar):
+//   undefined -> usuário não mexeu, mantém o que já estava salvo
+//   null      -> usuário pediu para remover o toque customizado
+//   {name, dataUrl} -> usuário escolheu um novo arquivo
+let pendingCustomSound;
+let previewPlaying = false;
+
+// Estado da UI de recorte (só existe enquanto o formulário de Preferências
+// está aberto): duração total do áudio ativo (buscada sob demanda, já que
+// não vem salva junto do som) e o início do trecho escolhido pelo usuário,
+// em segundos. null = ainda não calculado/escolhido nesta visita ao formulário.
+let pendingAudioDurationSeconds = null;
+let pendingTrimStartSeconds = null;
+let pendingWaveformPeaks = null; // forma de onda (graves) do áudio ativo, calculada sob demanda
+
+/** Toque "ativo" no momento, considerando o que está pendente no formulário. */
+function _activeSoundForPreferencesForm() {
+  if (pendingCustomSound === null) return null;
+  return pendingCustomSound || savedCustomSound;
+}
+
+function _renderSoundStatus() {
+  const active = _activeSoundForPreferencesForm();
+  el.prefSoundCurrent.textContent = active ? `Toque atual: ${active.name}` : 'Usando o beep padrão do app.';
+  el.btnSoundPreview.disabled = !active;
+  el.btnSoundRemove.disabled = !active;
+}
+
+function _formatSeconds(totalSeconds) {
+  const seconds = Math.max(0, Math.round(totalSeconds));
+  const minutes = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${minutes}:${String(secs).padStart(2, '0')}`;
+}
+
+/** Alarme configurado no momento no próprio formulário (não necessariamente já salvo). */
+function _formAlarmDurationSeconds() {
+  return clampAlarmDurationSeconds(Number(el.prefAlarmDuration.value));
+}
+
+/**
+ * Mostra (ou esconde) o seletor de trecho, semelhante ao recorte de música
+ * do Instagram: só faz sentido quando o áudio escolhido dura mais que o
+ * alarme configurado — nesse caso o usuário escolhe qual janela de N
+ * segundos do arquivo vai tocar, em vez de sempre o início dele.
+ */
+async function _updateTrimUI() {
+  const active = _activeSoundForPreferencesForm();
+  if (!active) {
+    el.prefSoundTrim.hidden = true;
+    return;
+  }
+
+  if (pendingAudioDurationSeconds == null) {
+    try {
+      pendingAudioDurationSeconds = await getAudioDuration(active.dataUrl);
+    } catch (err) {
+      console.warn('[app] Não foi possível calcular a duração do áudio escolhido:', err);
+      el.prefSoundTrim.hidden = true;
+      return;
+    }
+  }
+
+  const alarmSeconds = _formAlarmDurationSeconds();
+  const duration = pendingAudioDurationSeconds;
+
+  if (!(duration > alarmSeconds)) {
+    // Arquivo mais curto (ou igual) que o alarme: toca inteiro e repete, sem trecho a escolher.
+    el.prefSoundTrim.hidden = true;
+    return;
+  }
+
+  el.prefSoundTrim.hidden = false;
+
+  if (pendingWaveformPeaks == null) {
+    _renderWaveformPlaceholder();
+    try {
+      pendingWaveformPeaks = await getAudioWaveform(active.dataUrl);
+    } catch (err) {
+      console.warn('[app] Não foi possível gerar a visualização do áudio:', err);
+      pendingWaveformPeaks = [];
+    }
+    _renderWaveformBars(pendingWaveformPeaks);
+  }
+
+  const maxStart = Math.max(0, duration - alarmSeconds);
+  const previousStart = pendingTrimStartSeconds != null ? pendingTrimStartSeconds : (active.trimStartSeconds || 0);
+  const start = Math.min(previousStart, maxStart);
+  pendingTrimStartSeconds = start;
+
+  el.trimRange.min = '0';
+  el.trimRange.max = String(maxStart.toFixed(1));
+  el.trimRange.step = '0.1';
+  el.trimRange.value = String(start);
+
+  _renderTrimVisual(start, alarmSeconds, duration);
+}
+
+/** Barras neutras e "pulsando" enquanto a forma de onda real ainda está sendo calculada. */
+function _renderWaveformPlaceholder() {
+  const placeholderBars = 60;
+  el.trimWaveform.innerHTML = Array.from({ length: placeholderBars })
+    .map(() => '<div class="trim-waveform-bar trim-waveform-bar--placeholder" style="height:30%"></div>')
+    .join('');
+}
+
+/** Desenha a forma de onda (graves) real como barras, uma por pico calculado. */
+function _renderWaveformBars(peaks) {
+  if (!peaks || peaks.length === 0) {
+    el.trimWaveform.innerHTML = '';
+    return;
+  }
+  el.trimWaveform.innerHTML = peaks
+    .map((peak) => `<div class="trim-waveform-bar" style="height:${Math.max(12, Math.round(peak * 100))}%"></div>`)
+    .join('');
+}
+
+function _renderTrimVisual(startSeconds, alarmSeconds, durationSeconds) {
+  const leftPct = durationSeconds > 0 ? (startSeconds / durationSeconds) * 100 : 0;
+  const widthPct = durationSeconds > 0 ? Math.min(100, (alarmSeconds / durationSeconds) * 100) : 100;
+  el.trimWindow.style.left = `${leftPct}%`;
+  el.trimWindow.style.width = `${widthPct}%`;
+  el.trimRangeLabel.textContent =
+    `Tocando de ${_formatSeconds(startSeconds)} a ${_formatSeconds(startSeconds + alarmSeconds)} (de ${_formatSeconds(durationSeconds)} no total)`;
+}
+
+function _readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+el.prefSoundFile.addEventListener('change', async () => {
+  const file = el.prefSoundFile.files[0];
+  if (!file) return;
+
+  el.prefSoundWarning.hidden = true;
+  if (file.size > MAX_SOUND_FILE_BYTES) {
+    el.prefSoundWarning.textContent = 'Esse arquivo é grande (mais de 2MB) e pode não salvar corretamente, pois o navegador tem um limite de armazenamento. Se der erro ao salvar, tente um arquivo menor.';
+    el.prefSoundWarning.hidden = false;
+  }
+
+  const dataUrl = await _readFileAsDataUrl(file);
+  pendingCustomSound = { name: file.name, dataUrl };
+  pendingAudioDurationSeconds = null; // arquivo novo: recalcula a duração e reseta o trecho escolhido
+  pendingTrimStartSeconds = null;
+  pendingWaveformPeaks = null; // arquivo novo: recalcula a forma de onda também
+  _renderSoundStatus();
+  await _updateTrimUI();
+});
+
+el.btnSoundPreview.addEventListener('click', () => {
+  const active = _activeSoundForPreferencesForm();
+  if (!active) return;
+
+  if (previewPlaying) {
+    stopPreview();
+    previewPlaying = false;
+    el.btnSoundPreview.textContent = '▶ Tocar';
+    return;
+  }
+
+  previewPlaying = true;
+  el.btnSoundPreview.textContent = '⏸ Parar';
+
+  // Com o seletor de trecho visível, o preview toca exatamente a janela
+  // escolhida (mesmo trecho que vai tocar no alarme de verdade); caso
+  // contrário, toca o arquivo desde o início, como antes.
+  const trimActive = !el.prefSoundTrim.hidden;
+  const previewOptions = trimActive
+    ? { startSeconds: pendingTrimStartSeconds || 0, durationSeconds: _formAlarmDurationSeconds() }
+    : {};
+
+  playPreview(active.dataUrl, () => {
+    previewPlaying = false;
+    el.btnSoundPreview.textContent = '▶ Tocar';
+  }, previewOptions);
+});
+
+el.btnSoundRemove.addEventListener('click', () => {
+  stopPreview();
+  previewPlaying = false;
+  el.btnSoundPreview.textContent = '▶ Tocar';
+
+  pendingCustomSound = null;
+  pendingAudioDurationSeconds = null;
+  pendingTrimStartSeconds = null;
+  pendingWaveformPeaks = null;
+  el.prefSoundFile.value = '';
+  el.prefSoundWarning.hidden = true;
+  el.prefSoundTrim.hidden = true;
+  el.trimWaveform.innerHTML = '';
+  _renderSoundStatus();
+});
+
+// Mudar a duração do alarme (digitando ou por preset) redimensiona a janela
+// do trecho escolhido, já que o tamanho da janela é sempre igual ao alarme.
+el.prefAlarmDuration.addEventListener('input', () => {
+  _updateTrimUI();
+});
+
+el.prefAlarmPresetButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    el.prefAlarmDuration.value = btn.dataset.presetAlarmSeconds;
+    _updateTrimUI();
+  });
+});
+
+el.trimRange.addEventListener('input', () => {
+  pendingTrimStartSeconds = Number(el.trimRange.value) || 0;
+  _renderTrimVisual(pendingTrimStartSeconds, _formAlarmDurationSeconds(), pendingAudioDurationSeconds || 0);
+  if (previewPlaying) {
+    // Só move a posição do áudio que já está tocando (em vez de parar e
+    // criar um preview novo a cada pixel arrastado) — evita empilhar várias
+    // reproduções ao mesmo tempo enquanto o usuário arrasta o seletor.
+    seekPreview(pendingTrimStartSeconds, _formAlarmDurationSeconds());
+  }
+});
+
+el.btnPreferences.addEventListener('click', () => {
+  renderPreferencesForm();
+  showView('preferences');
+});
+
+el.btnPreferencesBack.addEventListener('click', () => {
+  stopPreview();
+  previewPlaying = false;
+  showView('home');
+});
+
+el.prefRatioStudy.addEventListener('input', updatePreferencesWarning);
+el.prefRatioRest.addEventListener('input', updatePreferencesWarning);
+
+el.prefPresetButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    el.prefStudyMinutes.value = btn.dataset.presetMinutes;
+  });
+});
+
+el.preferencesForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const defaultStudyMinutes = Number(el.prefStudyMinutes.value);
+  const ratioStudyPart = Number(el.prefRatioStudy.value);
+  const ratioRestPart = Number(el.prefRatioRest.value);
+  const alarmDurationSeconds = clampAlarmDurationSeconds(Number(el.prefAlarmDuration.value));
+
+  if (
+    !(defaultStudyMinutes > 0)
+    || !(ratioStudyPart > 0)
+    || !(ratioRestPart > 0)
+    || !isValidAlarmDurationSeconds(alarmDurationSeconds)
+  ) return;
+
+  currentPreferences = { defaultStudyMinutes, ratioStudyPart, ratioRestPart, alarmDurationSeconds };
+  await savePreferences(currentPreferences);
+  setAlertMaxDuration(alarmDurationSeconds * 1000);
+
+  // O trecho escolhido no seletor só vale quando ele está visível (áudio
+  // ativo mais longo que o alarme); fora isso o som toca desde o início.
+  const trimStartSeconds = !el.prefSoundTrim.hidden ? (pendingTrimStartSeconds || 0) : 0;
+
+  if (pendingCustomSound === null) {
+    // Usuário pediu para remover: volta ao beep padrão.
+    await clearCustomSound();
+    savedCustomSound = null;
+    setAlertCustomSound(null);
+  } else if (pendingCustomSound) {
+    // Usuário escolheu um novo arquivo (com o trecho escolhido, se houver).
+    const soundToSave = { ...pendingCustomSound, trimStartSeconds };
+    await saveCustomSound(soundToSave);
+    savedCustomSound = soundToSave;
+    setAlertCustomSound(soundToSave.dataUrl, soundToSave.trimStartSeconds);
+  } else if (savedCustomSound && !el.prefSoundTrim.hidden) {
+    // Usuário não trocou o arquivo, mas pode ter ajustado o trecho de um som já salvo.
+    savedCustomSound = { ...savedCustomSound, trimStartSeconds };
+    await saveCustomSound(savedCustomSound);
+    setAlertCustomSound(savedCustomSound.dataUrl, savedCustomSound.trimStartSeconds);
+  }
+  // pendingCustomSound === undefined e sem trecho para ajustar: nada do som muda.
+
+  stopPreview();
+  previewPlaying = false;
+  showView('home');
 });
 
 // ---------- Navegação entre telas ----------
@@ -205,20 +587,32 @@ el.btnChartBack.addEventListener('click', () => showView('home'));
 // ---------- Configuração ----------
 
 function showConfigView() {
+  restManuallyEdited = false;
+  el.inputStudy.value = currentPreferences.defaultStudyMinutes;
+  el.inputRest.value = _suggestRestMinutes(currentPreferences.defaultStudyMinutes);
   showView('config');
 }
 
 el.btnNew.addEventListener('click', showConfigView);
 el.btnConfigBack.addEventListener('click', () => showView('home'));
 
-// Mantém o descanso sugerido em proporção 5:1 enquanto o usuário não mexer nele manualmente.
+// Mantém o descanso sugerido na proporção definida em Preferências
+// (padrão 5:1) enquanto o usuário não mexer nele manualmente.
 let restManuallyEdited = false;
+
+function _suggestRestMinutes(studyMin) {
+  const restMs = computeRestMsForRatio(
+    studyMin * 60 * 1000,
+    currentPreferences.ratioStudyPart,
+    currentPreferences.ratioRestPart
+  );
+  return Math.max(1, Math.round(restMs / 60000));
+}
 
 el.inputStudy.addEventListener('input', () => {
   if (restManuallyEdited) return;
   const studyMin = Number(el.inputStudy.value) || 0;
-  const restMs = computeDefaultRestMs(studyMin * 60 * 1000);
-  el.inputRest.value = Math.max(1, Math.round(restMs / 60000));
+  el.inputRest.value = studyMin > 0 ? _suggestRestMinutes(studyMin) : '';
 });
 
 el.inputRest.addEventListener('input', () => {
@@ -369,6 +763,7 @@ function _formatClock(ms) {
 // ---------- Boot ----------
 
 (async function init() {
+  await loadCurrentPreferences();
   await app.init();
   // init() já dispara onPhaseChange internamente quando não há timer para
   // restaurar; garantimos a primeira renderização também para o caso de
