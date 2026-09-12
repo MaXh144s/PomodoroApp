@@ -189,6 +189,18 @@ export class CountdownTimer {
   }
 
   /**
+   * Calcula quanto tempo realmente resta com base num snapshot salvo,
+   * comparando o endTimestamp previsto com o momento atual. Sem isso,
+   * restore() de um snapshot RUNNING (o caso normal — o snapshot é salvo
+   * enquanto o cronômetro roda) lançava erro, quebrando a restauração
+   * inteira após um F5/reload e fazendo parecer que o ciclo foi perdido.
+   */
+  static computeRemainingMsFromSnapshot(snapshot) {
+    if (snapshot.endTimestamp == null) return snapshot.remainingAtPause;
+    return Math.max(0, snapshot.endTimestamp - Date.now());
+  }
+
+  /**
    * Restaura um timer a partir de um snapshot salvo, recalculando quanto
    * tempo passou desde então. Se o tempo já tiver se esgotado enquanto a
    * aba estava fechada, marca isFinished() = true — quem chamar deve

@@ -15,7 +15,10 @@
   <section id="view-home" class="view">
     <header class="home-header">
       <h1>Pomodoro</h1>
-      <button id="btn-new" class="fab" title="Novo temporizador" aria-label="Novo temporizador">+</button>
+      <div class="home-header-actions">
+        <button id="btn-chart" class="btn-icon" title="Gráfico da semana" aria-label="Gráfico da semana">📊</button>
+        <button id="btn-new" class="fab" title="Novo temporizador" aria-label="Novo temporizador">+</button>
+      </div>
     </header>
 
     <div class="card summary-card">
@@ -39,6 +42,20 @@
     <div id="home-history" class="card history-card" hidden>
       <p class="card-title">Histórico</p>
       <ul id="home-history-list" class="history-list"></ul>
+    </div>
+  </section>
+
+  <!-- ===================== GRÁFICO SEMANAL ===================== -->
+  <section id="view-chart" class="view" hidden>
+    <header class="view-header">
+      <button id="btn-chart-back" class="btn-icon" aria-label="Voltar">←</button>
+      <h2>Semana</h2>
+    </header>
+
+    <div class="card chart-card">
+      <p class="card-title">Tempo estudado por dia</p>
+      <div id="chart-bars" class="chart-bars"></div>
+      <p id="chart-total" class="chart-total"></p>
     </div>
   </section>
 

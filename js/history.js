@@ -77,6 +77,11 @@ export async function getAllSessions() {
   return loadSessions();
 }
 
+/** @returns {string} chave "YYYY-MM-DD" de hoje (fuso horário local) — útil pra UI comparar sem duplicar a formatação. */
+export function getTodayDateKey() {
+  return _toDateKey(new Date());
+}
+
 /**
  * @param {string} dateKey - formato "YYYY-MM-DD"
  * @returns {Promise<Array<Object>>} sessões daquele dia específico
@@ -89,6 +94,33 @@ export async function getSessionsForDate(dateKey) {
 /** @returns {Promise<Array<Object>>} sessões de hoje (fuso horário local) */
 export async function getTodaySessions() {
   return getSessionsForDate(_toDateKey(new Date()));
+}
+
+/**
+ * Resumo dos últimos N dias (padrão 7, incluindo hoje), na ordem do mais
+ * antigo para o mais recente — pronto para plotar um gráfico semanal.
+ * Ao contrário de getFullHistorySummary(), NÃO pula dias sem sessão: um dia
+ * sem nenhum estudo aparece com totalStudiedMs = 0, o que é essencial pra um
+ * gráfico não "pular" dias vazios e distorcer a leitura visual.
+ *
+ * @param {number} [days=7]
+ * @param {number} [referenceCycleMs=50min]
+ * @returns {Promise<Array<ReturnType<typeof computeDailySummary> & {dateKey: string}>>}
+ */
+export async function getLastNDaysSummary(days = 7, referenceCycleMs = DEFAULT_REFERENCE_CYCLE_MS) {
+  const sessions = await loadSessions();
+  const today = new Date();
+  const result = [];
+
+  for (let i = days - 1; i >= 0; i--) {
+    const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
+    const dateKey = _toDateKey(date);
+    const daySessions = sessions.filter((s) => s.date === dateKey);
+    const summary = computeDailySummary(daySessions, referenceCycleMs);
+    result.push({ dateKey, ...summary });
+  }
+
+  return result;
 }
 
 /**

@@ -7,10 +7,24 @@
  */
 
 import { PomodoroApp, Phase, computeDefaultRestMs } from './appstate.js';
-import { getTodaySummary, getFullHistorySummary, buildDailySummaryLabels } from './history.js';
+import { getTodaySummary, getFullHistorySummary, buildDailySummaryLabels, getLastNDaysSummary, getTodayDateKey } from './history.js';
 import { computeCycleProgress, formatDuration, formatCycleCount } from './cycles.js';
 
 const RING_CIRCUMFERENCE = 2 * Math.PI * 90; // deve bater com o raio do SVG em style.css
+
+// Cache do tempo total estudado hoje (somente sessões já concluídas, sem
+// contar a sessão em andamento). Evita ler e parsear o histórico inteiro do
+// localStorage a cada tick do cronômetro (4x/seg) — feito assim antes, isso
+// empilhava dezenas de milhares de leituras assíncronas ao longo de várias
+// horas encadeando sessões, e "Estudado hoje" acabava travando. Agora só é
+// recalculado quando muda de fato: ao entrar em estudo/descanso e quando uma
+// sessão é salva.
+let todayBaseMs = 0;
+
+async function refreshTodayBase() {
+  const summary = await getTodaySummary();
+  todayBaseMs = summary.totalStudiedMs;
+}
 
 // ---------- Referências de DOM ----------
 
@@ -19,10 +33,12 @@ const views = {
   config: document.getElementById('view-config'),
   timer: document.getElementById('view-timer'),
   alert: document.getElementById('view-alert'),
+  chart: document.getElementById('view-chart'),
 };
 
 const el = {
   btnNew: document.getElementById('btn-new'),
+  btnChart: document.getElementById('btn-chart'),
   homeTotalTime: document.getElementById('home-total-time'),
   homeMotivational: document.getElementById('home-motivational'),
   homeCycles: document.getElementById('home-cycles'),
@@ -30,6 +46,10 @@ const el = {
   homeEquivalence: document.getElementById('home-equivalence'),
   homeHistory: document.getElementById('home-history'),
   homeHistoryList: document.getElementById('home-history-list'),
+
+  btnChartBack: document.getElementById('btn-chart-back'),
+  chartBars: document.getElementById('chart-bars'),
+  chartTotal: document.getElementById('chart-total'),
 
   btnConfigBack: document.getElementById('btn-config-back'),
   configForm: document.getElementById('config-form'),
@@ -62,8 +82,9 @@ const app = new PomodoroApp({
   onPhaseChange: (phase) => renderForPhase(phase),
   onTick: (remainingMs, totalMs) => renderTick(remainingMs, totalMs),
   onSessionSaved: () => {
-    // Sessão gravada no histórico; a tela inicial é recalculada quando o
-    // usuário voltar para ela (renderHome busca os dados mais recentes).
+    // Mantém o cache de "estudado hoje" em dia sempre que uma sessão é
+    // gravada (concluída ou finalizada por Reiniciar/nova configuração).
+    refreshTodayBase();
   },
 });
 
@@ -85,7 +106,7 @@ async function renderForPhase(phase) {
     if (app.getPhase() !== phase) return;
     showView('home');
   } else if (phase === Phase.STUDY || phase === Phase.REST) {
-    renderTimerShell(phase);
+    await renderTimerShell(phase);
     showView('timer');
   } else if (phase === Phase.STUDY_ALERT || phase === Phase.REST_ALERT) {
     renderAlert(phase);
@@ -134,6 +155,53 @@ function _formatDateLabel(dateKey) {
   return `${day}/${month}/${year}`;
 }
 
+// ---------- Gráfico semanal ----------
+
+const WEEKDAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+async function renderChart() {
+  const days = await getLastNDaysSummary(7);
+  const maxMs = Math.max(...days.map((d) => d.totalStudiedMs));
+
+  if (maxMs === 0) {
+    el.chartBars.innerHTML = '<p class="chart-empty">Nenhum estudo registrado nos últimos 7 dias.</p>';
+    el.chartTotal.textContent = '';
+    return;
+  }
+
+  const todayKey = getTodayDateKey();
+
+  el.chartBars.innerHTML = days
+    .map((day) => {
+      const [year, month, dayOfMonth] = day.dateKey.split('-').map(Number);
+      const weekday = new Date(year, month - 1, dayOfMonth).getDay();
+      const hasStudy = day.totalStudiedMs > 0;
+      // Altura proporcional ao dia com mais estudo na janela; um piso mínimo
+      // (4%) garante que a barra continue visível/clicável mesmo em dias baixos.
+      const heightPct = hasStudy ? Math.max(4, (day.totalStudiedMs / maxMs) * 100) : 2;
+      const isToday = day.dateKey === todayKey;
+
+      return `
+        <div class="chart-bar-col${isToday ? ' today' : ''}">
+          <span class="chart-bar-value">${hasStudy ? formatDuration(day.totalStudiedMs) : ''}</span>
+          <div class="chart-bar${hasStudy ? ' has-study' : ''}" style="height: ${heightPct}%"></div>
+          <span class="chart-bar-label">${WEEKDAY_LABELS[weekday]}</span>
+        </div>
+      `;
+    })
+    .join('');
+
+  const weekTotalMs = days.reduce((sum, day) => sum + day.totalStudiedMs, 0);
+  el.chartTotal.textContent = `Total da semana: ${formatDuration(weekTotalMs)}`;
+}
+
+el.btnChart.addEventListener('click', async () => {
+  await renderChart();
+  showView('chart');
+});
+
+el.btnChartBack.addEventListener('click', () => showView('home'));
+
 // ---------- Configuração ----------
 
 function showConfigView() {
@@ -170,7 +238,7 @@ el.configForm.addEventListener('submit', async (event) => {
 
 // ---------- Cronômetro (estudo/descanso) ----------
 
-function renderTimerShell(phase) {
+async function renderTimerShell(phase) {
   const isStudy = phase === Phase.STUDY;
   el.timerState.textContent = isStudy ? 'ESTUDO' : 'DESCANSO';
   el.timerState.classList.toggle('rest', !isStudy);
@@ -181,6 +249,8 @@ function renderTimerShell(phase) {
     const delta = Number(btn.dataset.delta);
     btn.hidden = isStudy && delta < 0;
   });
+
+  await refreshTodayBase();
 
   const status = app.getStatus();
   if (status.timer) {
@@ -200,7 +270,7 @@ function renderTick(remainingMs, totalMs) {
   renderCycleInfo();
 }
 
-async function renderCycleInfo() {
+function renderCycleInfo() {
   const phase = app.getPhase();
   if (phase !== Phase.STUDY) {
     el.timerCycleInfo.textContent = '';
@@ -219,8 +289,7 @@ async function renderCycleInfo() {
     ? `${progress.completeCycles} ciclo(s) + ${formatCycleCount(progress.partialFraction, 2)} concluído`
     : `${formatCycleCount(progress.partialFraction, 2)} ciclo concluído`;
 
-  const todaySummary = await getTodaySummary();
-  el.timerTodayTotal.textContent = `Estudado hoje: ${formatDuration(todaySummary.totalStudiedMs + studiedMs)}`;
+  el.timerTodayTotal.textContent = `Estudado hoje: ${formatDuration(todayBaseMs + studiedMs)}`;
 }
 
 function updateToggleButtonLabel() {
@@ -246,8 +315,9 @@ el.btnReset.addEventListener('click', async () => {
   const phase = app.getPhase();
   if (phase === Phase.STUDY) await app.resetStudy();
   else if (phase === Phase.REST) app.resetRest();
+  await refreshTodayBase(); // garante que o cache já reflete a sessão parcial recém-salva, sem piscar um valor antigo
   updateToggleButtonLabel();
-  renderCycleInfo(); // reflete o "estudado hoje" já somando a sessão parcial recém-salva
+  renderCycleInfo();
 });
 
 el.timeAdjustButtons.forEach((btn) => {
