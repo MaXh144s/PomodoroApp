@@ -74,7 +74,10 @@ export class CountdownTimer {
   }
 
   resume() {
-    if (this._state !== TimerState.PAUSED) return;
+    // IDLE acontece logo após reset(): o cronômetro está parado com o tempo
+    // total pronto para rodar, funcionalmente equivalente a estar pausado.
+    // Sem isso, "Continuar" depois de "Reiniciar" não tinha efeito nenhum.
+    if (this._state !== TimerState.PAUSED && this._state !== TimerState.IDLE) return;
     this.start();
   }
 
