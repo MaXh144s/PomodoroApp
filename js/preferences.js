@@ -15,6 +15,7 @@ export const DEFAULT_STUDY_MINUTES = 25;
 export const DEFAULT_ALARM_DURATION_SECONDS = 10; // tempo máximo que o alarme toca antes de parar sozinho
 export const MIN_ALARM_DURATION_SECONDS = 3;
 export const MAX_ALARM_DURATION_SECONDS = 60;
+export const DEFAULT_DAILY_GOAL_MINUTES = 0; // 0 = sem meta definida (nenhuma linha de meta aparece no gráfico)
 
 /** Presets de duração de estudo oferecidos na tela de Configurações. */
 export const STUDY_DURATION_PRESETS = Object.freeze([25, 50, 60]); // minutos: 25min, 50min, 1h
@@ -44,14 +45,25 @@ export function clampAlarmDurationSeconds(seconds) {
   return Math.min(MAX_ALARM_DURATION_SECONDS, Math.max(MIN_ALARM_DURATION_SECONDS, seconds));
 }
 
-/** @returns {{ratioStudyPart: number, ratioRestPart: number, defaultStudyMinutes: number, alarmDurationSeconds: number}} */
+/** @returns {{ratioStudyPart: number, ratioRestPart: number, defaultStudyMinutes: number, alarmDurationSeconds: number, dailyGoalMinutes: number}} */
 export function getDefaultPreferences() {
   return {
     ratioStudyPart: DEFAULT_RATIO_STUDY_PART,
     ratioRestPart: DEFAULT_RATIO_REST_PART,
     defaultStudyMinutes: DEFAULT_STUDY_MINUTES,
     alarmDurationSeconds: DEFAULT_ALARM_DURATION_SECONDS,
+    dailyGoalMinutes: DEFAULT_DAILY_GOAL_MINUTES,
   };
+}
+
+/**
+ * Valida se um valor (em minutos) é uma meta diária aceitável.
+ * Zero é válido e significa "sem meta definida" (nenhuma linha no gráfico).
+ * @param {number} minutes
+ * @returns {boolean}
+ */
+export function isValidDailyGoalMinutes(minutes) {
+  return Number.isFinite(minutes) && minutes >= 0;
 }
 
 /**

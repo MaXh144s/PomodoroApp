@@ -8,18 +8,25 @@
 
 import { PomodoroApp, Phase } from './appstate.js';
 import { getTodaySummary, getFullHistorySummary, buildDailySummaryLabels, getLastNDaysSummary, getTodayDateKey } from './history.js';
-import { computeCycleProgress, formatDuration, formatCycleCount } from './cycles.js';
+import { computeCycleProgress, computeEquivalentCycles, formatDuration, formatCycleCount } from './cycles.js';
 import {
   getDefaultPreferences,
   computeRestMsForRatio,
   buildRatioRecommendation,
   clampAlarmDurationSeconds,
   isValidAlarmDurationSeconds,
+  isValidDailyGoalMinutes,
 } from './preferences.js';
 import { loadPreferences, savePreferences, loadCustomSound, saveCustomSound, clearCustomSound } from './storage.js';
 import { setAlertCustomSound, setAlertMaxDuration, playPreview, stopPreview, seekPreview, getAudioDuration, getAudioWaveform } from './sound.js';
 
 const RING_CIRCUMFERENCE = 2 * Math.PI * 90; // deve bater com o raio do SVG em style.css
+
+// Devem bater com .chart-bar-value e .chart-bar-track em style.css: são a
+// referência usada para posicionar (em pixels) as linhas de meta/média
+// exatamente na mesma escala das barras do gráfico.
+const CHART_VALUE_ROW_HEIGHT_PX = 18; // 14px de altura do texto + 4px de margem
+const CHART_TRACK_HEIGHT_PX = 160;
 
 // Cache do tempo total estudado hoje (somente sessões já concluídas, sem
 // contar a sessão em andamento). Evita ler e parsear o histórico inteiro do
@@ -58,13 +65,21 @@ const el = {
   homeHistoryList: document.getElementById('home-history-list'),
 
   btnChartBack: document.getElementById('btn-chart-back'),
+  chartPlotInner: document.getElementById('chart-plot-inner'),
+  chartGridlines: document.getElementById('chart-gridlines'),
   chartBars: document.getElementById('chart-bars'),
+  chartGoalLine: document.getElementById('chart-goal-line'),
+  chartAvgLine: document.getElementById('chart-avg-line'),
+  chartGoalTag: document.getElementById('chart-goal-tag'),
+  chartAvgTag: document.getElementById('chart-avg-tag'),
+  chartTooltip: document.getElementById('chart-tooltip'),
   chartTotal: document.getElementById('chart-total'),
 
   btnPreferences: document.getElementById('btn-preferences'),
   btnPreferencesBack: document.getElementById('btn-preferences-back'),
   preferencesForm: document.getElementById('preferences-form'),
   prefStudyMinutes: document.getElementById('pref-study-minutes'),
+  prefDailyGoalHours: document.getElementById('pref-daily-goal-hours'),
   prefRatioStudy: document.getElementById('pref-ratio-study'),
   prefRatioRest: document.getElementById('pref-ratio-rest'),
   prefWarning: document.getElementById('pref-warning'),
@@ -146,6 +161,7 @@ async function loadCurrentPreferences() {
 
 function renderPreferencesForm() {
   el.prefStudyMinutes.value = currentPreferences.defaultStudyMinutes;
+  el.prefDailyGoalHours.value = (currentPreferences.dailyGoalMinutes ?? 0) / 60;
   el.prefRatioStudy.value = currentPreferences.ratioStudyPart;
   el.prefRatioRest.value = currentPreferences.ratioRestPart;
   el.prefAlarmDuration.value = currentPreferences.alarmDurationSeconds;
@@ -427,18 +443,21 @@ el.prefPresetButtons.forEach((btn) => {
 el.preferencesForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const defaultStudyMinutes = Number(el.prefStudyMinutes.value);
+  const dailyGoalHours = Number(el.prefDailyGoalHours.value);
+  const dailyGoalMinutes = dailyGoalHours * 60;
   const ratioStudyPart = Number(el.prefRatioStudy.value);
   const ratioRestPart = Number(el.prefRatioRest.value);
   const alarmDurationSeconds = clampAlarmDurationSeconds(Number(el.prefAlarmDuration.value));
 
   if (
     !(defaultStudyMinutes > 0)
+    || !isValidDailyGoalMinutes(dailyGoalMinutes)
     || !(ratioStudyPart > 0)
     || !(ratioRestPart > 0)
     || !isValidAlarmDurationSeconds(alarmDurationSeconds)
   ) return;
 
-  currentPreferences = { defaultStudyMinutes, ratioStudyPart, ratioRestPart, alarmDurationSeconds };
+  currentPreferences = { defaultStudyMinutes, dailyGoalMinutes, ratioStudyPart, ratioRestPart, alarmDurationSeconds };
   await savePreferences(currentPreferences);
   setAlertMaxDuration(alarmDurationSeconds * 1000);
 
@@ -540,16 +559,37 @@ function _formatDateLabel(dateKey) {
 // ---------- Gráfico semanal ----------
 
 const WEEKDAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+const CHART_GRIDLINE_RATIOS = [0.25, 0.5, 0.75]; // linhas de referência, puramente decorativas
 
 async function renderChart() {
   const days = await getLastNDaysSummary(7);
-  const maxMs = Math.max(...days.map((d) => d.totalStudiedMs));
+  const totals = days.map((d) => d.totalStudiedMs);
+
+  // Meta diária definida em Preferências (0 = sem meta, linha fica escondida).
+  const goalMinutes = currentPreferences.dailyGoalMinutes || 0;
+  const goalMs = goalMinutes > 0 ? goalMinutes * 60 * 1000 : 0;
+
+  // A meta entra no cálculo do teto do gráfico (maxMs) para que a linha de
+  // meta sempre caiba na área visível, mesmo em semanas onde nenhum dia
+  // ainda chegou perto dela.
+  const maxMs = Math.max(...totals, goalMs);
+
+  _hideChartTooltip();
 
   if (maxMs === 0) {
     el.chartBars.innerHTML = '<p class="chart-empty">Nenhum estudo registrado nos últimos 7 dias.</p>';
     el.chartTotal.textContent = '';
+    el.chartGoalLine.hidden = true;
+    el.chartAvgLine.hidden = true;
+    el.chartGoalTag.hidden = true;
+    el.chartAvgTag.hidden = true;
+    el.chartGridlines.innerHTML = '';
     return;
   }
+
+  el.chartGridlines.innerHTML = CHART_GRIDLINE_RATIOS
+    .map((ratio) => `<div class="chart-gridline" style="top: ${(1 - ratio) * 100}%"></div>`)
+    .join('');
 
   const todayKey = getTodayDateKey();
 
@@ -558,23 +598,86 @@ async function renderChart() {
       const [year, month, dayOfMonth] = day.dateKey.split('-').map(Number);
       const weekday = new Date(year, month - 1, dayOfMonth).getDay();
       const hasStudy = day.totalStudiedMs > 0;
-      // Altura proporcional ao dia com mais estudo na janela; um piso mínimo
-      // (4%) garante que a barra continue visível/clicável mesmo em dias baixos.
+      // Altura proporcional ao dia com mais estudo na janela (ou à meta,
+      // se ela for maior); um piso mínimo (4%) garante que a barra continue
+      // visível/clicável mesmo em dias baixos.
       const heightPct = hasStudy ? Math.max(4, (day.totalStudiedMs / maxMs) * 100) : 2;
       const isToday = day.dateKey === todayKey;
 
       return `
         <div class="chart-bar-col${isToday ? ' today' : ''}">
           <span class="chart-bar-value">${hasStudy ? formatDuration(day.totalStudiedMs) : ''}</span>
-          <div class="chart-bar${hasStudy ? ' has-study' : ''}" style="height: ${heightPct}%"></div>
+          <div class="chart-bar-track">
+            <div class="chart-bar${hasStudy ? ' has-study' : ''}" style="height: ${heightPct}%"></div>
+          </div>
           <span class="chart-bar-label">${WEEKDAY_LABELS[weekday]}</span>
         </div>
       `;
     })
     .join('');
 
-  const weekTotalMs = days.reduce((sum, day) => sum + day.totalStudiedMs, 0);
-  el.chartTotal.textContent = `Total da semana: ${formatDuration(weekTotalMs)}`;
+  // Tooltip customizado ao passar o mouse (ou tocar) em cada coluna: mostra
+  // a data, o tempo estudado e a quantos ciclos do tempo de estudo padrão
+  // (Preferências) aquele dia equivale — ex: "2,7 ciclos de 35min".
+  const referenceStudyMs = currentPreferences.defaultStudyMinutes * 60 * 1000;
+  Array.from(el.chartBars.querySelectorAll('.chart-bar-col')).forEach((col, i) => {
+    const day = days[i];
+    col.addEventListener('mouseenter', () => _showChartTooltip(col, day, referenceStudyMs));
+    col.addEventListener('mouseleave', _hideChartTooltip);
+  });
+
+  const weekTotalMs = totals.reduce((sum, ms) => sum + ms, 0);
+  // Média simples: soma de todos os dias com estudo dividida pela
+  // quantidade desses dias (dias sem nenhum estudo não entram na conta,
+  // senão eles "diluiriam" a média para baixo).
+  const daysWithStudyCount = totals.filter((ms) => ms > 0).length;
+  const avgMs = daysWithStudyCount > 0 ? weekTotalMs / daysWithStudyCount : 0;
+
+  _positionChartMarker(el.chartGoalLine, el.chartGoalTag, goalMs, maxMs, `Meta ${formatDuration(goalMs)}`);
+  el.chartGoalLine.hidden = goalMs <= 0;
+  el.chartGoalTag.hidden = goalMs <= 0;
+
+  _positionChartMarker(el.chartAvgLine, el.chartAvgTag, avgMs, maxMs, `Média ${formatDuration(avgMs)}`);
+  el.chartAvgLine.hidden = false;
+  el.chartAvgTag.hidden = false;
+
+  const goalLabel = goalMs > 0 ? ` · Meta: ${formatDuration(goalMs)}/dia` : '';
+  el.chartTotal.textContent = `Total da semana: ${formatDuration(weekTotalMs)} · Média: ${formatDuration(avgMs)}/dia${goalLabel}`;
+}
+
+/**
+ * Posiciona (em pixels) a linha de referência DENTRO da área de plotagem e o
+ * selo correspondente na coluna de eixo à esquerda, ambos na mesma altura
+ * (mesma referência de escala 0 a maxMs) — assim ficam alinhados entre si
+ * sem que o selo tampe as barras ou os valores do gráfico.
+ */
+function _positionChartMarker(lineEl, tagEl, valueMs, maxMs, text) {
+  const ratio = maxMs > 0 ? Math.min(1, valueMs / maxMs) : 0;
+  const topPx = CHART_VALUE_ROW_HEIGHT_PX + (1 - ratio) * CHART_TRACK_HEIGHT_PX;
+  lineEl.style.top = `${topPx}px`;
+  tagEl.style.top = `${topPx}px`;
+  tagEl.textContent = text;
+}
+
+/** Mostra o tooltip customizado centralizado sobre a coluna do dia com o resumo daquele dia. */
+function _showChartTooltip(colEl, day, referenceStudyMs) {
+  const hasStudy = day.totalStudiedMs > 0;
+  const timeLabel = hasStudy ? formatDuration(day.totalStudiedMs) : 'Sem estudo';
+  const equivalentCycles = computeEquivalentCycles(day.totalStudiedMs, referenceStudyMs);
+  const cyclesLabel = `${formatCycleCount(equivalentCycles)} ciclos de ${currentPreferences.defaultStudyMinutes}min`;
+
+  el.chartTooltip.innerHTML = `<strong>${_formatDateLabel(day.dateKey)}</strong>${timeLabel}<br>${cyclesLabel}`;
+
+  const plotRect = el.chartPlot.getBoundingClientRect();
+  const colRect = colEl.getBoundingClientRect();
+  el.chartTooltip.style.left = `${colRect.left - plotRect.left + colRect.width / 2}px`;
+  el.chartTooltip.hidden = false;
+  el.chartTooltip.classList.add('visible');
+}
+
+function _hideChartTooltip() {
+  el.chartTooltip.hidden = true;
+  el.chartTooltip.classList.remove('visible');
 }
 
 el.btnChart.addEventListener('click', async () => {

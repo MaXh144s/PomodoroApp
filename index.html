@@ -55,7 +55,19 @@
 
     <div class="card chart-card">
       <p class="card-title">Tempo estudado por dia</p>
-      <div id="chart-bars" class="chart-bars"></div>
+      <div id="chart-plot" class="chart-plot">
+        <div class="chart-axis">
+          <span id="chart-goal-tag" class="chart-axis-tag chart-axis-tag--goal" hidden></span>
+          <span id="chart-avg-tag" class="chart-axis-tag chart-axis-tag--avg" hidden></span>
+        </div>
+        <div id="chart-plot-inner" class="chart-plot-inner">
+          <div id="chart-gridlines" class="chart-gridlines"></div>
+          <div id="chart-goal-line" class="chart-line chart-line--goal" hidden></div>
+          <div id="chart-avg-line" class="chart-line chart-line--avg" hidden></div>
+          <div id="chart-bars" class="chart-bars"></div>
+          <div id="chart-tooltip" class="chart-tooltip" hidden></div>
+        </div>
+      </div>
       <p id="chart-total" class="chart-total"></p>
     </div>
   </section>
@@ -78,6 +90,13 @@
         <button type="button" class="btn btn-chip" data-preset-minutes="50">50min</button>
         <button type="button" class="btn btn-chip" data-preset-minutes="60">1h</button>
       </div>
+
+      <label class="field">
+        <span>Meta diária de estudo (horas)</span>
+        <input type="number" id="pref-daily-goal-hours" min="0" step="0.5" required>
+      </label>
+
+      <p class="field-hint">Aparece como uma linha no gráfico da semana. Use 0 para não definir meta.</p>
 
       <label class="field">
         <span>Proporção estudo : descanso</span>

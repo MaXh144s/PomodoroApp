@@ -477,45 +477,147 @@ body {
 
 /* ---------- Gráfico semanal ---------- */
 
+.chart-plot {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+/* Coluna reservada à esquerda para os selos de meta/média — separada da
+   área das barras para não tampar mais os valores/barras do gráfico. */
+.chart-axis {
+  position: relative;
+  flex: none;
+  width: 74px;
+}
+
+.chart-axis-tag {
+  position: absolute;
+  left: 0;
+  right: 0;
+  transform: translateY(-50%);
+  text-align: right;
+  padding-right: 6px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.chart-axis-tag--goal {
+  color: var(--color-primary);
+}
+
+.chart-axis-tag--avg {
+  color: var(--color-rest);
+}
+
+.chart-plot-inner {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Linhas de referência (25/50/75/100%) só para dar noção de escala —
+   puramente decorativas, atrás das barras. */
+.chart-gridlines {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 18px; /* deve bater com CHART_VALUE_ROW_HEIGHT_PX em app.js */
+  height: 160px; /* deve bater com CHART_TRACK_HEIGHT_PX em app.js */
+  pointer-events: none;
+}
+
+.chart-gridline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--color-border);
+}
+
 .chart-bars {
+  position: relative; /* fica acima das gridlines */
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 8px;
-  height: 200px;
-  padding-top: 28px;
+  gap: 4px;
 }
 
 .chart-bar-col {
   flex: 1;
-  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: flex-end;
+  border-radius: 10px;
+  padding: 3px 0 5px;
+  transition: background-color 0.15s ease;
+}
+
+.chart-bar-col:hover,
+.chart-bar-col.active {
+  background: rgba(226, 87, 43, 0.07);
+}
+
+.chart-bar-col.today {
+  background: rgba(226, 87, 43, 0.05);
 }
 
 .chart-bar-value {
+  height: 14px;
+  line-height: 14px;
   font-size: 0.7rem;
+  font-weight: 600;
   color: var(--color-text-muted);
   margin-bottom: 4px;
   white-space: nowrap;
+  overflow: hidden;
+}
+
+/* Altura fixa (em vez de flex:1 num container também de altura variável):
+   é o que permite calcular com precisão, em pixels, tanto a altura da
+   barra (X% disso) quanto a posição das linhas de meta/média sobrepostas
+   (chart-line), que precisam da mesma referência para baterem com as barras. */
+.chart-bar-track {
+  height: 160px;
+  width: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  position: relative;
+  z-index: 1;
 }
 
 .chart-bar {
   width: 100%;
-  max-width: 26px;
-  min-height: 3px;
-  border-radius: 6px 6px 2px 2px;
+  max-width: 24px;
+  min-height: 4px;
+  border-radius: 8px 8px 3px 3px;
   background: var(--color-border);
+  transform-origin: bottom;
+  transition: filter 0.15s ease, transform 0.15s ease;
 }
 
 .chart-bar.has-study {
-  background: var(--color-primary);
+  background: linear-gradient(180deg, #ef8462 0%, var(--color-primary) 100%);
+  box-shadow: 0 3px 8px rgba(226, 87, 43, 0.28);
+  /* Cresce do zero até a altura final ao renderizar — dá uma sensação viva
+     ao gráfico em vez das barras simplesmente "aparecerem" prontas. */
+  animation: chart-bar-grow 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .chart-bar-col.today .chart-bar.has-study {
-  background: var(--color-primary-dark);
+  background: linear-gradient(180deg, #ff9270 0%, var(--color-primary-dark) 100%);
+}
+
+.chart-bar-col:hover .chart-bar.has-study,
+.chart-bar-col.active .chart-bar.has-study {
+  filter: brightness(1.08);
+  transform: scaleY(1.015);
+}
+
+@keyframes chart-bar-grow {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
 }
 
 .chart-bar-label {
@@ -526,7 +628,68 @@ body {
 }
 
 .chart-bar-col.today .chart-bar-label {
-  color: var(--color-text);
+  color: var(--color-primary-dark);
+}
+
+/* Linhas sobrepostas de meta diária (Preferências) e média da semana.
+   Posicionadas via "top" em pixels pelo JS (ver renderChart), usando a
+   mesma referência de altura da trilha (.chart-bar-track) para baterem
+   exatamente com a escala das barras. */
+.chart-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.chart-line--goal {
+  border-top: 2px solid var(--color-primary);
+}
+
+.chart-line--avg {
+  border-top: 2px dashed var(--color-rest);
+}
+
+/* Tooltip customizado ao passar o mouse (ou tocar, no celular) numa coluna. */
+.chart-tooltip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: translate(-50%, calc(-100% - 10px));
+  background: var(--color-text);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 3;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+
+.chart-tooltip.visible {
+  opacity: 1;
+}
+
+.chart-tooltip strong {
+  display: block;
+  font-size: 0.82rem;
+  margin-bottom: 2px;
+}
+
+.chart-tooltip::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--color-text);
 }
 
 .chart-empty {
