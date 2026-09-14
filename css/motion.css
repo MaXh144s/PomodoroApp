@@ -1,0 +1,145 @@
+/**
+ * motion.css
+ * Sistema de motion do app: tokens de duração/easing/elevação, transição
+ * entre telas (View Transitions API), animação de entrada/saída dos
+ * modais e overlays, e estados de foco visível.
+ *
+ * Carregar DEPOIS de style.css. Não redefine nada que já existe lá —
+ * só adiciona.
+ */
+
+:root {
+  /* Raio — escala complementar ao --radius existente em style.css */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-full: 999px;
+
+  /* Elevação — hoje não havia nenhuma sombra consistente no app */
+  --shadow-sm: 0 2px 8px rgba(43, 43, 43, 0.06);
+  --shadow-md: 0 8px 24px rgba(43, 43, 43, 0.10);
+  --shadow-lg: 0 16px 40px rgba(43, 43, 43, 0.16);
+
+  /* Motion — escala compartilhada para toda transição/animação nova */
+  --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  --duration-fast: 120ms;
+  --duration-base: 220ms;
+  --duration-slow: 380ms;
+}
+
+/* ---------- Foco visível (hoje só existia o padrão do navegador) ---------- */
+
+.btn:focus-visible,
+.btn-icon:focus-visible,
+.btn-chip:focus-visible,
+.fab:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ---------- Transição entre telas ----------
+ * showView() em app.js envolve a troca de tela em document.startViewTransition()
+ * e marca a direção em documentElement.dataset.viewTransition:
+ * "forward" (avançando no fluxo), "backward" (voltando) ou "fade"
+ * (continuação, ex: alerta -> cronômetro ao pular).
+ */
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--duration-slow);
+  animation-timing-function: var(--ease-standard);
+}
+
+:root[data-view-transition="forward"]::view-transition-old(root) {
+  animation-name: motion-slide-out-up;
+}
+:root[data-view-transition="forward"]::view-transition-new(root) {
+  animation-name: motion-slide-in-up;
+}
+
+:root[data-view-transition="backward"]::view-transition-old(root) {
+  animation-name: motion-slide-out-down;
+}
+:root[data-view-transition="backward"]::view-transition-new(root) {
+  animation-name: motion-slide-in-down;
+}
+
+/* "fade": mantém só o cross-fade padrão da View Transitions API, sem
+   deslocamento — é uma continuação (ex: alerta -> cronômetro), não uma
+   nova tela. */
+:root[data-view-transition="fade"]::view-transition-old(root),
+:root[data-view-transition="fade"]::view-transition-new(root) {
+  animation-name: none;
+}
+
+@keyframes motion-slide-in-up {
+  from { transform: translateY(16px); opacity: 0; }
+}
+@keyframes motion-slide-out-up {
+  to { transform: translateY(-16px); opacity: 0; }
+}
+@keyframes motion-slide-in-down {
+  from { transform: translateY(-16px); opacity: 0; }
+}
+@keyframes motion-slide-out-down {
+  to { transform: translateY(16px); opacity: 0; }
+}
+
+/* ---------- Modais e overlays ----------
+ * modal-resume (e view-alert, via a transição de tela acima) ganham
+ * entrada em scale-in + fade. A saída do modal-resume é coreografada em
+ * app.js (classe .closing) porque [hidden] corta a renderização na hora.
+ */
+
+.modal-overlay {
+  backdrop-filter: blur(2px);
+}
+
+.modal-overlay:not([hidden]) {
+  animation: motion-backdrop-in var(--duration-base) var(--ease-standard);
+}
+.modal-overlay:not([hidden]) .modal-card {
+  animation: motion-modal-in var(--duration-base) var(--ease-emphasized);
+}
+
+.modal-overlay.closing {
+  animation: motion-backdrop-out var(--duration-fast) var(--ease-standard) forwards;
+}
+.modal-overlay.closing .modal-card {
+  animation: motion-modal-out var(--duration-fast) var(--ease-standard) forwards;
+}
+
+@keyframes motion-backdrop-in { from { opacity: 0; } }
+@keyframes motion-backdrop-out { to { opacity: 0; } }
+@keyframes motion-modal-in {
+  from { opacity: 0; transform: scale(0.96) translateY(4px); }
+}
+@keyframes motion-modal-out {
+  to { opacity: 0; transform: scale(0.96) translateY(4px); }
+}
+
+/* ---------- Anel do cronômetro: recuperação de progresso ----------
+ * Ao retomar um ciclo com progresso já em andamento (app.js,
+ * _animateRingEntrance), o anel preenche de 0 até o ponto atual. A
+ * transição padrão do anel (0.2s linear, em style.css) é rápida demais
+ * pra se notar num salto grande — essa classe assume temporariamente
+ * enquanto dura essa animação de entrada.
+ */
+.progress-ring-fg.ring-catchup {
+  transition: stroke-dashoffset 900ms var(--ease-standard);
+}
+
+/* ---------- Acessibilidade: prefers-reduced-motion ----------
+ * Precisa ser a última regra do arquivo para vencer tudo acima.
+ * app.js também checa isso via matchMedia antes de chamar
+ * startViewTransition(), então nem chega a montar o snapshot de transição.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

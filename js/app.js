@@ -54,6 +54,13 @@ const views = {
 };
 
 const el = {
+  saveIndicator: document.getElementById('save-indicator'),
+
+  modalResume: document.getElementById('modal-resume'),
+  modalResumeDetail: document.getElementById('modal-resume-detail'),
+  btnResumeSession: document.getElementById('btn-resume-session'),
+  btnNewSession: document.getElementById('btn-new-session'),
+
   btnNew: document.getElementById('btn-new'),
   btnChart: document.getElementById('btn-chart'),
   homeTotalTime: document.getElementById('home-total-time'),
@@ -422,13 +429,13 @@ el.trimRange.addEventListener('input', () => {
 
 el.btnPreferences.addEventListener('click', () => {
   renderPreferencesForm();
-  showView('preferences');
+  showView('preferences', 'forward');
 });
 
 el.btnPreferencesBack.addEventListener('click', () => {
   stopPreview();
   previewPlaying = false;
-  showView('home');
+  showView('home', 'backward');
 });
 
 el.prefRatioStudy.addEventListener('input', updatePreferencesWarning);
@@ -486,18 +493,58 @@ el.preferencesForm.addEventListener('submit', async (event) => {
 
   stopPreview();
   previewPlaying = false;
-  showView('home');
+  showView('home', 'backward');
 });
 
 // ---------- Navegação entre telas ----------
 
-function showView(name) {
-  Object.entries(views).forEach(([key, node]) => {
-    node.hidden = key !== name;
+// Fica true depois da primeira renderização (boot). Evita animar a troca
+// de tela na carga inicial da página, quando não há "de onde" vir.
+let navigationReady = false;
+
+function _prefersReducedMotion() {
+  return typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function _getCurrentViewName() {
+  const entry = Object.entries(views).find(([, node]) => !node.hidden);
+  return entry ? entry[0] : null;
+}
+
+/**
+ * Troca a tela visível. `direction` controla a linguagem de movimento:
+ * - 'forward'  -> avançando no fluxo (entra de baixo pra cima)
+ * - 'backward' -> voltando (sai pra baixo, ex: seta de voltar)
+ * - 'fade'     -> continuação, sem deslocamento (ex: alerta -> cronômetro ao pular)
+ * Usa a View Transitions API quando disponível; cai para a troca instantânea
+ * de sempre em navegadores sem suporte ou com prefers-reduced-motion ativo.
+ */
+function showView(name, direction = 'forward') {
+  const update = () => {
+    Object.entries(views).forEach(([key, node]) => {
+      node.hidden = key !== name;
+    });
+  };
+
+  if (!navigationReady || !document.startViewTransition || _prefersReducedMotion()) {
+    update();
+    return;
+  }
+
+  document.documentElement.dataset.viewTransition = direction;
+  const transition = document.startViewTransition(update);
+  transition.finished.finally(() => {
+    delete document.documentElement.dataset.viewTransition;
   });
 }
 
 async function renderForPhase(phase) {
+  const previousView = _getCurrentViewName();
+  // Vindo do alerta, a troca é sempre uma continuação (fade), nunca um
+  // "avançar/voltar" no fluxo de navegação.
+  const fromAlert = previousView === 'alert';
+
   if (phase === Phase.CONFIG) {
     await renderHome();
     // Race condition: enquanto renderHome() buscava dados (async), a fase
@@ -505,14 +552,16 @@ async function renderForPhase(phase) {
     // em seguida pelo handler do formulário). Nesse caso este render ficou
     // obsoleto — não pode sobrescrever a tela que já reflete a fase atual.
     if (app.getPhase() !== phase) return;
-    showView('home');
+    showView('home', fromAlert ? 'fade' : 'backward');
   } else if (phase === Phase.STUDY || phase === Phase.REST) {
     await renderTimerShell(phase);
-    showView('timer');
+    showView('timer', fromAlert ? 'fade' : 'forward');
   } else if (phase === Phase.STUDY_ALERT || phase === Phase.REST_ALERT) {
     renderAlert(phase);
-    showView('alert');
+    showView('alert', 'fade');
   }
+
+  navigationReady = true;
 }
 
 // ---------- Tela inicial ----------
@@ -682,10 +731,10 @@ function _hideChartTooltip() {
 
 el.btnChart.addEventListener('click', async () => {
   await renderChart();
-  showView('chart');
+  showView('chart', 'forward');
 });
 
-el.btnChartBack.addEventListener('click', () => showView('home'));
+el.btnChartBack.addEventListener('click', () => showView('home', 'backward'));
 
 // ---------- Configuração ----------
 
@@ -693,11 +742,61 @@ function showConfigView() {
   restManuallyEdited = false;
   el.inputStudy.value = currentPreferences.defaultStudyMinutes;
   el.inputRest.value = _suggestRestMinutes(currentPreferences.defaultStudyMinutes);
-  showView('config');
+  showView('config', 'forward');
 }
 
-el.btnNew.addEventListener('click', showConfigView);
-el.btnConfigBack.addEventListener('click', () => showView('home'));
+// ---------- Modal de sessão de estudo inacabada ----------
+
+function _openResumeModal() {
+  const status = app.getStatus();
+  if (status.timer) {
+    const studiedMin = Math.max(1, Math.round((status.timer.totalMs - status.timer.remainingMs) / 60000));
+    const totalMin = Math.round(status.timer.totalMs / 60000);
+    el.modalResumeDetail.textContent = `Você estudou ${studiedMin}min de um ciclo de ${totalMin}min.`;
+  } else {
+    el.modalResumeDetail.textContent = '';
+  }
+  el.modalResume.hidden = false;
+}
+
+function _closeResumeModal() {
+  // [hidden] corta a renderização na hora — para a saída também animar
+  // (não só a entrada), espera a animação de saída (.closing, ver
+  // motion.css) antes de esconder de fato.
+  if (_prefersReducedMotion()) {
+    el.modalResume.hidden = true;
+    return;
+  }
+  el.modalResume.classList.add('closing');
+  setTimeout(() => {
+    el.modalResume.hidden = true;
+    el.modalResume.classList.remove('closing');
+  }, 120); // deve bater com --duration-fast em motion.css
+}
+
+el.btnResumeSession.addEventListener('click', async () => {
+  _closeResumeModal();
+  await renderForPhase(app.getPhase());
+});
+
+el.btnNewSession.addEventListener('click', async () => {
+  _closeResumeModal();
+  await app.finalizeStudyAndReturnToConfig();
+  await refreshTodayBase();
+  showConfigView();
+});
+
+el.btnNew.addEventListener('click', () => {
+  // Só se aplica ao estudo (não ao descanso): se houver uma sessão pausada
+  // (deixada pela seta de voltar), pergunta se quer continuar ou começar
+  // uma nova em vez de simplesmente descartar.
+  if (app.getPhase() === Phase.STUDY) {
+    _openResumeModal();
+    return;
+  }
+  showConfigView();
+});
+el.btnConfigBack.addEventListener('click', () => showView('home', 'backward'));
 
 // Mantém o descanso sugerido na proporção definida em Preferências
 // (padrão 5:1) enquanto o usuário não mexer nele manualmente.
@@ -751,7 +850,9 @@ async function renderTimerShell(phase) {
 
   const status = app.getStatus();
   if (status.timer) {
-    renderTick(status.timer.remainingMs, status.timer.totalMs);
+    el.timerRemaining.textContent = _formatClock(status.timer.remainingMs);
+    el.timerConfigured.textContent = `de ${formatDuration(status.timer.totalMs)}`;
+    _animateRingEntrance(status.timer.remainingMs, status.timer.totalMs);
   }
   updateToggleButtonLabel();
   renderCycleInfo();
@@ -760,11 +861,46 @@ async function renderTimerShell(phase) {
 function renderTick(remainingMs, totalMs) {
   el.timerRemaining.textContent = _formatClock(remainingMs);
   el.timerConfigured.textContent = `de ${formatDuration(totalMs)}`;
+  _setRingProgress(remainingMs, totalMs);
+  renderCycleInfo();
+}
 
+function _setRingProgress(remainingMs, totalMs) {
   const progress = totalMs > 0 ? 1 - remainingMs / totalMs : 0;
   el.progressRingFg.style.strokeDashoffset = String(RING_CIRCUMFERENCE * (1 - progress));
+}
 
-  renderCycleInfo();
+/**
+ * Ao entrar na tela do cronômetro com um ciclo que já tem progresso
+ * (retomar pelo modal, restaurar após F5, ou voltar depois de sair pela
+ * seta), o anel preenche suavemente do zero até o ponto em que estava —
+ * em vez de simplesmente já aparecer naquela posição. Um ciclo recém-
+ * -iniciado (progresso zero) não precisa disso, já nasce vazio mesmo.
+ */
+function _animateRingEntrance(remainingMs, totalMs) {
+  const hasProgress = totalMs > 0 && remainingMs < totalMs;
+
+  if (!hasProgress || _prefersReducedMotion()) {
+    _setRingProgress(remainingMs, totalMs);
+    return;
+  }
+
+  // Zera a posição sem transição, força o navegador a registrar esse
+  // estado (reflow) e só então solta o valor real — a transição usada
+  // tick a tick (0.2s linear, em style.css) passa rápido demais pra se
+  // notar num salto grande, por isso troca temporariamente para uma mais
+  // longa (.ring-catchup, em motion.css) enquanto dura essa animação.
+  el.progressRingFg.classList.add('ring-catchup');
+  el.progressRingFg.style.transition = 'none';
+  el.progressRingFg.style.strokeDashoffset = String(RING_CIRCUMFERENCE);
+  el.progressRingFg.getBoundingClientRect(); // força reflow
+  el.progressRingFg.style.transition = '';
+
+  _setRingProgress(remainingMs, totalMs);
+
+  const cleanup = () => el.progressRingFg.classList.remove('ring-catchup');
+  el.progressRingFg.addEventListener('transitionend', cleanup, { once: true });
+  setTimeout(cleanup, 1000); // salvaguarda caso transitionend não dispare
 }
 
 function renderCycleInfo() {
@@ -830,9 +966,18 @@ el.timeAdjustButtons.forEach((btn) => {
   });
 });
 
-el.btnTimerHome.addEventListener('click', () => {
-  // Volta para a tela inicial sem interromper o cronômetro em andamento.
-  showView('home');
+el.btnTimerHome.addEventListener('click', async () => {
+  // Durante o estudo, sair pela seta de voltar salva no histórico o tempo
+  // realmente decorrido até agora (e só esse tempo, sem contar de novo o
+  // que já tiver sido salvo antes) e pausa o cronômetro. A sessão continua
+  // aberta para ser retomada pelo botão "+" — só quem decide se continua
+  // ou começa uma nova é o usuário, no modal. No descanso, o cronômetro
+  // continua em segundo plano normalmente.
+  if (app.getPhase() === Phase.STUDY) {
+    await app.checkpointAndPauseStudy();
+    await refreshTodayBase();
+  }
+  showView('home', 'backward');
   renderHome();
 });
 
@@ -864,6 +1009,46 @@ function _formatClock(ms) {
 }
 
 // ---------- Boot ----------
+
+// Salva o progresso imediatamente ao esconder a aba (trocar de app, minimizar,
+// fechar), em vez de esperar o intervalo normal de persistência — vale a
+// partir de qualquer tempo já estudado/descansado, mesmo pouco. Mostra um
+// pequeno indicador para o usuário confirmar visualmente que foi salvo.
+let saveIndicatorHideTimeout = null;
+
+function _showSavingIndicator() {
+  clearTimeout(saveIndicatorHideTimeout);
+  el.saveIndicator.textContent = '💾 Salvando…';
+  el.saveIndicator.hidden = false;
+  requestAnimationFrame(() => el.saveIndicator.classList.add('visible'));
+}
+
+function _showSavedConfirmation() {
+  el.saveIndicator.textContent = '💾 Progresso salvo';
+  saveIndicatorHideTimeout = setTimeout(() => {
+    el.saveIndicator.classList.remove('visible');
+    setTimeout(() => { el.saveIndicator.hidden = true; }, 200);
+  }, 1500);
+}
+
+document.addEventListener('visibilitychange', () => {
+  const phase = app.getPhase();
+  if (phase !== Phase.STUDY && phase !== Phase.REST) return;
+
+  if (document.visibilityState === 'hidden') {
+    app.persistNow();
+    _showSavingIndicator();
+  } else if (!el.saveIndicator.hidden) {
+    _showSavedConfirmation();
+  }
+});
+
+// Fallback: alguns navegadores (principalmente mobile) disparam pagehide
+// sem um visibilitychange confiável antes de fechar de fato a aba.
+window.addEventListener('pagehide', () => {
+  const phase = app.getPhase();
+  if (phase === Phase.STUDY || phase === Phase.REST) app.persistNow();
+});
 
 (async function init() {
   await loadCurrentPreferences();

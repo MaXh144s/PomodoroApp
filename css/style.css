@@ -709,6 +709,60 @@ body {
   border-top: 1px solid var(--color-border);
 }
 
+/* ---------- Indicador de salvamento (ao sair/voltar da aba) ---------- */
+
+.save-indicator {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  background: var(--color-text);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 999px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+  z-index: 20;
+}
+
+.save-indicator.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ---------- Modal de sessão de estudo inacabada ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 25;
+}
+
+.modal-overlay[hidden] {
+  display: none;
+}
+
+.modal-card {
+  max-width: 340px;
+  width: 100%;
+  margin: 0;
+}
+
+.modal-detail {
+  color: var(--color-text-muted);
+  font-size: 0.95rem;
+  margin: 8px 0 0;
+}
+
 /* ---------- Responsivo ---------- */
 
 @media (max-width: 380px) {

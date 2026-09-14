@@ -67,6 +67,7 @@ export class PomodoroApp {
     this._phase = Phase.CONFIG;
     this._timer = null;
     this._studyStartTimestamp = null; // início da tentativa de estudo atual (para o registro de sessão)
+    this._studyCheckpointMs = 0; // quanto do estudo atual já foi salvo no histórico (evita contar 2x ao sair/voltar)
     this._tickCounter = 0;
   }
 
@@ -85,6 +86,7 @@ export class PomodoroApp {
       const snapshot = await loadTimerSnapshot();
       this._phase = savedAppState.phase;
       this._studyStartTimestamp = savedAppState.studyStartTimestamp ?? null;
+      this._studyCheckpointMs = savedAppState.studyCheckpointMs ?? 0;
       if (snapshot) {
         this._restoreTimerFromSnapshot(snapshot);
         return;
@@ -139,6 +141,7 @@ export class PomodoroApp {
   startStudy() {
     unlockAudio(); // aproveita este clique do usuário para destravar o áudio para o alerta futuro
     this._studyStartTimestamp = Date.now();
+    this._studyCheckpointMs = 0;
     this._timer = new CountdownTimer({
       durationMs: this._settings.studyMs,
       allowDecrease: false, // regra da seção 3: tempo de estudo nunca diminui
@@ -173,11 +176,18 @@ export class PomodoroApp {
 
     const remaining = this._timer.getRemainingMs();
     const configuredMs = this._timer.getTotalDurationMs();
-    const studiedMs = configuredMs - remaining;
+    const elapsedMs = configuredMs - remaining;
+    const deltaMs = elapsedMs - this._studyCheckpointMs; // só o que ainda não foi salvo (ex: pelo checkpoint da seta de voltar)
     const endTimestamp = Date.now();
 
-    await this._finalizeStudySession({ studiedMs, configuredMs, endTimestamp });
+    await this._finalizeStudySession({
+      studiedMs: deltaMs,
+      configuredMs,
+      endTimestamp,
+      startTimestampOverride: endTimestamp - deltaMs,
+    });
 
+    this._studyCheckpointMs = 0;
     this._timer.reset();
     this._studyStartTimestamp = Date.now();
     this._persistSnapshotNow();
@@ -200,11 +210,17 @@ export class PomodoroApp {
   }
 
   async _handleStudyFinished() {
-    const studiedMs = this._timer.getTotalDurationMs(); // completou 100% do tempo configurado
     const configuredMs = this._timer.getTotalDurationMs();
+    const deltaMs = configuredMs - this._studyCheckpointMs; // completou 100%, mas parte já pode ter sido salva antes
     const endTimestamp = Date.now();
 
-    await this._finalizeStudySession({ studiedMs, configuredMs, endTimestamp });
+    await this._finalizeStudySession({
+      studiedMs: deltaMs,
+      configuredMs,
+      endTimestamp,
+      startTimestampOverride: endTimestamp - deltaMs,
+    });
+    this._studyCheckpointMs = 0;
 
     this._destroyTimer();
     this._setPhase(Phase.STUDY_ALERT);
@@ -297,6 +313,66 @@ export class PomodoroApp {
     this.startStudy();
   }
 
+  /**
+   * Chamado ao sair pela seta de voltar durante o estudo: salva no
+   * histórico apenas o tempo REALMENTE decorrido desde o último checkpoint
+   * (evita contar de novo o que já tiver sido salvo antes, ex: se o usuário
+   * sair e voltar mais de uma vez no mesmo ciclo) e pausa o cronômetro.
+   * A sessão continua aberta (fase permanece STUDY) para poder ser
+   * retomada depois pelo botão "+" — só é encerrada de vez quando o
+   * usuário escolhe "Nova sessão" (finalizeStudyAndReturnToConfig()),
+   * reinicia o ciclo (resetStudy()) ou o estudo termina normalmente.
+   * Não faz nada se a fase atual não for STUDY.
+   */
+  async checkpointAndPauseStudy() {
+    if (this._phase !== Phase.STUDY || !this._timer) return;
+
+    const remaining = this._timer.getRemainingMs();
+    const configuredMs = this._timer.getTotalDurationMs();
+    const elapsedMs = configuredMs - remaining;
+    const deltaMs = elapsedMs - this._studyCheckpointMs;
+
+    if (deltaMs > 0) {
+      const endTimestamp = Date.now();
+      await this._finalizeStudySession({
+        studiedMs: deltaMs,
+        configuredMs,
+        endTimestamp,
+        startTimestampOverride: endTimestamp - deltaMs,
+      });
+      this._studyCheckpointMs = elapsedMs;
+    }
+
+    if (this._timer.getState() === TimerState.RUNNING) {
+      this._timer.pause();
+    }
+    this._persistSnapshotNow();
+  }
+
+  /**
+   * Finaliza o estudo em andamento (se houver), salvando a sessão parcial
+   * no histórico, e volta a fase para CONFIG — sem alterar as configurações
+   * salvas (diferente de configure(), não recebe nova duração).
+   *
+   * Usado quando o usuário, ao ver o modal de "sessão inacabada" (disparado
+   * pelo botão "+"), escolhe começar uma nova sessão em vez de continuar a
+   * anterior — a sessão pausada é registrada no histórico antes de abrir a
+   * tela de configuração.
+   *
+   * Não faz nada se a fase atual não for STUDY — descanso não é finalizado
+   * por aqui, continua rodando em segundo plano normalmente.
+   */
+  async finalizeStudyAndReturnToConfig() {
+    if (this._phase !== Phase.STUDY) return;
+
+    await this._finalizeStudyIfInProgress();
+    this._destroyTimer();
+    stopAllAlerts();
+
+    this._setPhase(Phase.CONFIG);
+    await saveTimerSnapshot(null);
+  }
+
   // ---------- Consulta de status (para a UI) ----------
 
   getPhase() {
@@ -325,6 +401,19 @@ export class PomodoroApp {
     };
   }
 
+  /**
+   * Força a persistência imediata do snapshot atual (fase + cronômetro),
+   * sem esperar o intervalo normal de ticks (SNAPSHOT_PERSIST_EVERY_N_TICKS).
+   * Usado ao detectar que a aba está sendo escondida/fechada, para não
+   * arriscar perder até ~1s de progresso — vale independente de quanto
+   * tempo já se passou na sessão atual (mesmo poucos segundos são salvos).
+   * Não faz nada se não houver fase de estudo/descanso ativa.
+   */
+  persistNow() {
+    if (this._phase !== Phase.STUDY && this._phase !== Phase.REST) return;
+    this._persistSnapshotNow();
+  }
+
   /** Libera recursos (timers, alarmes). Chamar ao desmontar o app, se aplicável. */
   destroy() {
     this._destroyTimer();
@@ -344,17 +433,24 @@ export class PomodoroApp {
 
     const remaining = this._timer.getRemainingMs();
     const configuredMs = this._timer.getTotalDurationMs();
-    const studiedMs = configuredMs - remaining;
+    const elapsedMs = configuredMs - remaining;
+    const deltaMs = elapsedMs - this._studyCheckpointMs;
     const endTimestamp = Date.now();
 
-    await this._finalizeStudySession({ studiedMs, configuredMs, endTimestamp });
+    await this._finalizeStudySession({
+      studiedMs: deltaMs,
+      configuredMs,
+      endTimestamp,
+      startTimestampOverride: endTimestamp - deltaMs,
+    });
+    this._studyCheckpointMs = 0;
   }
 
-  async _finalizeStudySession({ studiedMs, configuredMs, endTimestamp }) {
-    if (studiedMs <= 0) return; // nada efetivamente estudado, não vale registrar
+  async _finalizeStudySession({ studiedMs, configuredMs, endTimestamp, startTimestampOverride }) {
+    if (studiedMs <= 0) return; // nada de novo desde o último checkpoint, não vale registrar
 
     const record = createSessionRecord({
-      startTimestamp: this._studyStartTimestamp ?? endTimestamp - studiedMs,
+      startTimestamp: startTimestampOverride ?? this._studyStartTimestamp ?? endTimestamp - studiedMs,
       endTimestamp,
       configuredMs,
       studiedMs,
@@ -394,7 +490,11 @@ export class PomodoroApp {
   }
 
   _persistSnapshotNow() {
-    saveAppState({ phase: this._phase, studyStartTimestamp: this._studyStartTimestamp });
+    saveAppState({
+      phase: this._phase,
+      studyStartTimestamp: this._studyStartTimestamp,
+      studyCheckpointMs: this._studyCheckpointMs,
+    });
     if (this._timer) {
       saveTimerSnapshot(this._timer.serialize());
     } else {

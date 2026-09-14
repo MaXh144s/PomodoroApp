@@ -21,6 +21,21 @@ export const TimerState = Object.freeze({
   FINISHED: 'FINISHED',
 });
 
+/**
+ * "Agora" usado pelo cronômetro para toda a matemática de tempo restante.
+ * Em uso normal é idêntico a Date.now(). Se o script opcional de debug
+ * (js/debug.js — não versionado, cada dev adiciona no próprio .gitignore)
+ * tiver sido carregado, ele expõe window.__pomodoroTimeScale com um
+ * relógio acelerado (2x a 100x), permitindo testar ciclos inteiros em
+ * segundos em vez de esperar o tempo real. Sem esse script, o
+ * comportamento é exatamente o mesmo de sempre — nenhuma dependência é
+ * criada aqui, só uma checagem de um global opcional.
+ */
+function _now() {
+  const debugClock = typeof window !== 'undefined' ? window.__pomodoroTimeScale : null;
+  return debugClock ? debugClock.now() : Date.now();
+}
+
 export class CountdownTimer {
   /**
    * @param {Object} options
@@ -60,7 +75,7 @@ export class CountdownTimer {
   start() {
     if (this._state === TimerState.RUNNING) return;
     this._finished = false;
-    this._endTimestamp = Date.now() + this._remainingAtPause;
+    this._endTimestamp = _now() + this._remainingAtPause;
     this._state = TimerState.RUNNING;
     this._scheduleTicks();
     this._tick();
@@ -122,7 +137,7 @@ export class CountdownTimer {
 
     if (this._state === TimerState.RUNNING) {
       const remaining = Math.max(0, this._computeRemaining() + deltaMs);
-      this._endTimestamp = Date.now() + remaining;
+      this._endTimestamp = _now() + remaining;
       if (remaining <= 0) {
         this._forceFinish();
         this._emitTick();
@@ -197,7 +212,7 @@ export class CountdownTimer {
    */
   static computeRemainingMsFromSnapshot(snapshot) {
     if (snapshot.endTimestamp == null) return snapshot.remainingAtPause;
-    return Math.max(0, snapshot.endTimestamp - Date.now());
+    return Math.max(0, snapshot.endTimestamp - _now());
   }
 
   /**
@@ -239,7 +254,7 @@ export class CountdownTimer {
 
   _computeRemaining() {
     if (this._endTimestamp == null) return this._remainingAtPause;
-    return Math.max(0, this._endTimestamp - Date.now());
+    return Math.max(0, this._endTimestamp - _now());
   }
 
   _scheduleTicks() {

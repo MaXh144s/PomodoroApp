@@ -1,0 +1,90 @@
+/**
+ * depth.css
+ * Cores e profundidade: sombras (usando os tokens --shadow-sm/md/lg de
+ * motion.css) e gradientes sutis nos elementos de destaque — botão
+ * primário, FAB, badge de fase e anel do cronômetro.
+ *
+ * Carregar DEPOIS de style.css e motion.css. Não redefine layout nem
+ * comportamento, só cor/elevação.
+ */
+
+:root {
+  --color-primary-light: #ff8659;
+  --color-rest-light: #5babef;
+  --color-rest-dark: #1f6fc4;
+}
+
+/* Fundo com leve gradiente radial em vez de cor chapada — dá uma
+   sensação sutil de profundidade atrás dos cards, sem chamar atenção. */
+body {
+  background: radial-gradient(circle at 50% -10%, #fffefb 0%, var(--color-bg) 55%);
+}
+
+/* ---------- Cards ---------- */
+
+.card {
+  box-shadow: var(--shadow-sm);
+}
+
+/* O resumo do dia e o gráfico são o conteúdo principal da tela inicial —
+   merecem um pouco mais de destaque que um card de formulário comum. */
+.summary-card,
+.chart-card {
+  box-shadow: var(--shadow-md);
+}
+
+.modal-card {
+  box-shadow: var(--shadow-lg);
+}
+
+/* ---------- Botões ---------- */
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--color-primary-light) 0%, var(--color-primary) 55%, var(--color-primary-dark) 100%);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-primary:hover {
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+  box-shadow: var(--shadow-md);
+}
+
+.btn-secondary:hover,
+.btn-chip:hover {
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- FAB ---------- */
+
+.fab {
+  background: linear-gradient(135deg, var(--color-primary-light) 0%, var(--color-primary) 55%, var(--color-primary-dark) 100%);
+  box-shadow: var(--shadow-md), 0 4px 14px rgba(226, 87, 43, 0.35);
+}
+
+/* ---------- Badge de fase (ESTUDO/DESCANSO) ---------- */
+
+.state-badge {
+  background: linear-gradient(135deg, var(--color-primary-light), var(--color-primary-dark));
+  box-shadow: var(--shadow-sm);
+}
+
+.state-badge.rest {
+  background: linear-gradient(135deg, var(--color-rest-light), var(--color-rest-dark));
+}
+
+/* ---------- Anel do cronômetro (o elemento mais olhado do app) ---------- */
+
+.progress-ring-fg {
+  filter: drop-shadow(0 0 6px rgba(226, 87, 43, 0.35));
+}
+
+.state-badge.rest ~ .timer-display .progress-ring-fg,
+.timer-display.rest .progress-ring-fg {
+  filter: drop-shadow(0 0 6px rgba(43, 143, 226, 0.35));
+}
+
+/* ---------- Seletor de trecho do áudio ---------- */
+
+.trim-window {
+  box-shadow: var(--shadow-sm);
+}

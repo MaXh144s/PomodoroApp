@@ -6,10 +6,26 @@
 <title>Pomodoro</title>
 <link rel="icon" href="img/favicon.png" type="image/x-icon">
 <link rel="stylesheet" href="./css/style.css">
+<link rel="stylesheet" href="./css/motion.css">
+<link rel="stylesheet" href="./css/depth.css">
 </head>
 <body>
 
 <main class="app">
+
+  <span id="save-indicator" class="save-indicator" hidden></span>
+
+  <div id="modal-resume" class="modal-overlay" hidden>
+    <div class="card alert-box modal-card">
+      <h2>Última sessão inacabada</h2>
+      <p id="modal-resume-detail" class="modal-detail"></p>
+      <p class="modal-detail">Deseja continuar de onde parou ou começar uma nova sessão?</p>
+      <div class="alert-actions">
+        <button id="btn-resume-session" class="btn btn-secondary">Continuar</button>
+        <button id="btn-new-session" class="btn btn-primary">Nova sessão</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ===================== TELA INICIAL ===================== -->
   <section id="view-home" class="view">
@@ -226,5 +242,11 @@
 </main>
 
 <script type="module" src="./js/app.js"></script>
+<!-- Painel de debug opcional (acelera o tempo do cronômetro para testes).
+     Arquivo não versionado — adicione js/debug.js no seu .gitignore.
+     Se o arquivo não existir, este script só falha silenciosamente e o
+     resto do app funciona normalmente. -->
+<script type="module" src="./js/debug.js"></script>
+
 </body>
 </html>
