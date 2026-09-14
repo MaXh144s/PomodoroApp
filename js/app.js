@@ -571,6 +571,7 @@ async function renderForPhase(phase) {
     _playRingEntranceIfPending();
   } else if (phase === Phase.STUDY_ALERT || phase === Phase.REST_ALERT) {
     renderAlert(phase);
+    _notifyPhaseFinishedIfHidden(phase);
     await showView('alert', 'fade');
   }
 
@@ -841,6 +842,7 @@ el.configForm.addEventListener('submit', async (event) => {
   if (!(studyMin > 0) || !(restMin > 0)) return;
 
   restManuallyEdited = false;
+  _requestNotificationPermissionIfNeeded();
   await app.configure(studyMin * 60 * 1000, restMin * 60 * 1000);
   app.startStudy();
 });
@@ -1027,6 +1029,51 @@ el.btnSkipAlert.addEventListener('click', () => {
   app.skipAlert();
 });
 
+// ---------- Notificações em segundo plano ----------
+
+/**
+ * Pede permissão de notificação na primeira vez que o usuário inicia um
+ * estudo (não no carregamento da página, para não assustar/ser ignorado
+ * antes de o app mostrar valor). Se o navegador não suportar a API, ou se
+ * a pessoa já tiver respondido antes (concedido ou negado), Notification.
+ * permission deixa de ser 'default' e isto não faz mais nada nas próximas
+ * vezes — não precisa de nenhum controle extra de "já perguntei".
+ */
+function _requestNotificationPermissionIfNeeded() {
+  if (typeof Notification === 'undefined') return;
+  if (Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => {});
+  }
+}
+
+/**
+ * Dispara uma notificação do navegador + vibração (mobile) quando um ciclo
+ * termina enquanto a aba está em segundo plano — o alarme sonoro sozinho
+ * não ajuda se a pessoa estiver noutro app/aba e não ouvir o beep.
+ * Não faz nada se a aba estiver visível (a tela de alerta já cobre esse
+ * caso) ou se a permissão não tiver sido concedida.
+ */
+function _notifyPhaseFinishedIfHidden(phase) {
+  if (document.visibilityState !== 'hidden') return;
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+
+  const isStudyDone = phase === Phase.STUDY_ALERT;
+  const title = isStudyDone ? 'Estudo concluído! 🍅' : 'Descanso concluído!';
+  const body = isStudyDone ? 'Hora de descansar.' : 'Hora de voltar a estudar.';
+
+  if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+
+  if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+    // Via service worker: a notificação continua funcionando mesmo se a
+    // aba tiver sido totalmente descarregada da memória pelo navegador.
+    navigator.serviceWorker.ready.then((registration) => {
+      registration.showNotification(title, { body, icon: './img/icon-192.png', tag: 'pomodoro-alert' });
+    });
+  } else {
+    new Notification(title, { body, icon: './img/icon-192.png', tag: 'pomodoro-alert' });
+  }
+}
+
 // ---------- Utilitário local ----------
 
 function _formatClock(ms) {
@@ -1083,6 +1130,17 @@ window.addEventListener('pagehide', () => {
   const phase = app.getPhase();
   if (phase === Phase.STUDY || phase === Phase.REST) app.persistNow();
 });
+
+// Registra o service worker (cache offline + instalação como PWA). Falha
+// silenciosa em navegadores sem suporte — o app continua funcionando
+// normalmente sem esse recurso, só sem cache offline.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch((err) => {
+      console.warn('[app] Falha ao registrar o service worker:', err);
+    });
+  });
+}
 
 (async function init() {
   await loadCurrentPreferences();
