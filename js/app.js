@@ -519,6 +519,13 @@ function _getCurrentViewName() {
  * - 'fade'     -> continuação, sem deslocamento (ex: alerta -> cronômetro ao pular)
  * Usa a View Transitions API quando disponível; cai para a troca instantânea
  * de sempre em navegadores sem suporte ou com prefers-reduced-motion ativo.
+ *
+ * Retorna uma Promise que resolve quando é seguro animar algo na tela
+ * recém-mostrada (ex: o anel do cronômetro). Enquanto o crossfade da View
+ * Transition está rolando, o navegador exibe uma FOTO congelada da tela
+ * nova por cima do DOM real — qualquer mudança de estilo feita antes disso
+ * terminar fica escondida atrás dela. Por isso só resolve depois do
+ * crossfade (transition.finished), não logo após o DOM mudar.
  */
 function showView(name, direction = 'forward') {
   const update = () => {
@@ -529,14 +536,16 @@ function showView(name, direction = 'forward') {
 
   if (!navigationReady || !document.startViewTransition || _prefersReducedMotion()) {
     update();
-    return;
+    return Promise.resolve();
   }
 
   document.documentElement.dataset.viewTransition = direction;
   const transition = document.startViewTransition(update);
-  transition.finished.finally(() => {
-    delete document.documentElement.dataset.viewTransition;
-  });
+  return transition.finished
+    .catch(() => {}) // transições podem ser abortadas (ex: navegação rápida); seguir mesmo assim
+    .finally(() => {
+      delete document.documentElement.dataset.viewTransition;
+    });
 }
 
 async function renderForPhase(phase) {
@@ -552,13 +561,17 @@ async function renderForPhase(phase) {
     // em seguida pelo handler do formulário). Nesse caso este render ficou
     // obsoleto — não pode sobrescrever a tela que já reflete a fase atual.
     if (app.getPhase() !== phase) return;
-    showView('home', fromAlert ? 'fade' : 'backward');
+    await showView('home', fromAlert ? 'fade' : 'backward');
   } else if (phase === Phase.STUDY || phase === Phase.REST) {
+    // renderTimerShell() já deixa o anel pronto em 0 (ver _prepareRingEntrance)
+    // quando é uma retomada — assim, o primeiro frame em que a tela aparece
+    // já mostra o anel vazio, sem esperar nada.
     await renderTimerShell(phase);
-    showView('timer', fromAlert ? 'fade' : 'forward');
+    await showView('timer', fromAlert ? 'fade' : 'forward');
+    _playRingEntranceIfPending();
   } else if (phase === Phase.STUDY_ALERT || phase === Phase.REST_ALERT) {
     renderAlert(phase);
-    showView('alert', 'fade');
+    await showView('alert', 'fade');
   }
 
   navigationReady = true;
@@ -852,7 +865,7 @@ async function renderTimerShell(phase) {
   if (status.timer) {
     el.timerRemaining.textContent = _formatClock(status.timer.remainingMs);
     el.timerConfigured.textContent = `de ${formatDuration(status.timer.totalMs)}`;
-    _animateRingEntrance(status.timer.remainingMs, status.timer.totalMs);
+    _prepareRingEntrance(status.timer.remainingMs, status.timer.totalMs);
   }
   updateToggleButtonLabel();
   renderCycleInfo();
@@ -871,36 +884,51 @@ function _setRingProgress(remainingMs, totalMs) {
 }
 
 /**
- * Ao entrar na tela do cronômetro com um ciclo que já tem progresso
- * (retomar pelo modal, restaurar após F5, ou voltar depois de sair pela
- * seta), o anel preenche suavemente do zero até o ponto em que estava —
- * em vez de simplesmente já aparecer naquela posição. Um ciclo recém-
- * -iniciado (progresso zero) não precisa disso, já nasce vazio mesmo.
+ * Se o ciclo já tem progresso (retomar pelo modal, restaurar após F5, ou
+ * voltar pela seta), deixa o anel já em 0 — sem transição — antes mesmo
+ * de a tela aparecer, e guarda o valor real pra onde ele deve ir. Assim,
+ * o primeiro frame em que a tela do cronômetro fica visível já mostra o
+ * anel vazio, e _playRingEntranceIfPending() dispara o preenchimento logo
+ * em seguida, sem nenhuma pausa perceptível entre um e outro.
+ * Um ciclo recém-iniciado (progresso zero) não precisa de nada disso.
  */
-function _animateRingEntrance(remainingMs, totalMs) {
+let _pendingRingEntrance = null;
+
+function _prepareRingEntrance(remainingMs, totalMs) {
   const hasProgress = totalMs > 0 && remainingMs < totalMs;
 
   if (!hasProgress || _prefersReducedMotion()) {
+    _pendingRingEntrance = null;
     _setRingProgress(remainingMs, totalMs);
     return;
   }
 
-  // Zera a posição sem transição, força o navegador a registrar esse
-  // estado (reflow) e só então solta o valor real — a transição usada
-  // tick a tick (0.2s linear, em style.css) passa rápido demais pra se
-  // notar num salto grande, por isso troca temporariamente para uma mais
-  // longa (.ring-catchup, em motion.css) enquanto dura essa animação.
+  _pendingRingEntrance = { remainingMs, totalMs };
   el.progressRingFg.classList.add('ring-catchup');
   el.progressRingFg.style.transition = 'none';
   el.progressRingFg.style.strokeDashoffset = String(RING_CIRCUMFERENCE);
-  el.progressRingFg.getBoundingClientRect(); // força reflow
-  el.progressRingFg.style.transition = '';
+}
 
-  _setRingProgress(remainingMs, totalMs);
+/**
+ * Chamada logo depois de a tela do cronômetro ficar visível. Um único
+ * requestAnimationFrame basta aqui (diferente de antes) porque o anel já
+ * foi zerado num passo anterior, ainda com a tela escondida — só
+ * precisamos garantir que o navegador pintou esse estado "vazio" already
+ * visível antes de soltar a transição para o valor real.
+ */
+function _playRingEntranceIfPending() {
+  if (!_pendingRingEntrance) return;
+  const { remainingMs, totalMs } = _pendingRingEntrance;
+  _pendingRingEntrance = null;
 
-  const cleanup = () => el.progressRingFg.classList.remove('ring-catchup');
-  el.progressRingFg.addEventListener('transitionend', cleanup, { once: true });
-  setTimeout(cleanup, 1000); // salvaguarda caso transitionend não dispare
+  requestAnimationFrame(() => {
+    el.progressRingFg.style.transition = '';
+    _setRingProgress(remainingMs, totalMs);
+
+    const cleanup = () => el.progressRingFg.classList.remove('ring-catchup');
+    el.progressRingFg.addEventListener('transitionend', cleanup, { once: true });
+    setTimeout(cleanup, 1000); // salvaguarda caso transitionend não dispare
+  });
 }
 
 function renderCycleInfo() {
