@@ -414,6 +414,17 @@ export class PomodoroApp {
     this._persistSnapshotNow();
   }
 
+  /**
+   * Força uma checagem imediata do cronômetro ativo (ver comentário em
+   * timer.js/forceCheck()). Chamar ao a aba voltar a ficar visível: garante
+   * que o alarme dispare sem atraso perceptível mesmo se os timers tiverem
+   * sofrido throttling (ou sido suspensos) enquanto a aba estava escondida.
+   * Não faz nada se não houver cronômetro ativo (fases de alerta, config etc.).
+   */
+  checkTimerNow() {
+    if (this._timer) this._timer.forceCheck();
+  }
+
   /** Libera recursos (timers, alarmes). Chamar ao desmontar o app, se aplicável. */
   destroy() {
     this._destroyTimer();

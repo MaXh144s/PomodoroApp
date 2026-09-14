@@ -567,7 +567,7 @@ async function renderForPhase(phase) {
     // quando é uma retomada — assim, o primeiro frame em que a tela aparece
     // já mostra o anel vazio, sem esperar nada.
     await renderTimerShell(phase);
-    await showView('timer', fromAlert ? 'fade' : 'forward');
+    showView('timer', fromAlert ? 'fade' : 'forward');
     _playRingEntranceIfPending();
   } else if (phase === Phase.STUDY_ALERT || phase === Phase.REST_ALERT) {
     renderAlert(phase);
@@ -1066,8 +1066,14 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     app.persistNow();
     _showSavingIndicator();
-  } else if (!el.saveIndicator.hidden) {
-    _showSavedConfirmation();
+  } else if (document.visibilityState === 'visible') {
+    // Garante que o alarme dispare sem atraso perceptível mesmo se os
+    // timers tiverem sofrido throttling (ou sido suspensos) em segundo
+    // plano — ver comentário em CountdownTimer.forceCheck().
+    app.checkTimerNow();
+    if (!el.saveIndicator.hidden) {
+      _showSavedConfirmation();
+    }
   }
 });
 

@@ -36,6 +36,20 @@ function _now() {
   return debugClock ? debugClock.now() : Date.now();
 }
 
+/**
+ * Converte uma duração restante (no relógio de _now(), que pode estar
+ * acelerado pelo painel de debug opcional) no delay real de setTimeout
+ * correspondente. Sem isso, o timeout dedicado de término (ver
+ * _scheduleFinishTimeout) demoraria tempo real demais para disparar
+ * sempre que a aceleração de debug estivesse ativa.
+ */
+function _realDelayFor(remainingMs) {
+  const debugClock = typeof window !== 'undefined' ? window.__pomodoroTimeScale : null;
+  if (!debugClock || typeof debugClock.getScale !== 'function') return remainingMs;
+  const scale = debugClock.getScale() || 1;
+  return remainingMs / scale;
+}
+
 export class CountdownTimer {
   /**
    * @param {Object} options
@@ -67,6 +81,7 @@ export class CountdownTimer {
     this._remainingAtPause = durationMs;  // válido quando IDLE/PAUSED
 
     this._intervalId = null;
+    this._finishTimeoutId = null; // timeout único agendado exatamente para o instante de término (ver _scheduleFinishTimeout)
     this._finished = false;
   }
 
@@ -143,6 +158,7 @@ export class CountdownTimer {
         this._emitTick();
         return true;
       }
+      this._scheduleFinishTimeout();
     } else {
       this._remainingAtPause = Math.max(0, this._remainingAtPause + deltaMs);
       if (this._remainingAtPause <= 0 && deltaMs < 0) {
@@ -159,6 +175,19 @@ export class CountdownTimer {
   /** Para o timer e limpa intervalos (chamar ao desmontar/destruir a instância). */
   destroy() {
     this._clearTicks();
+  }
+
+  /**
+   * Força uma checagem imediata do tempo restante, sem esperar o próximo
+   * tick agendado (polling ou timeout dedicado). Usado ao a aba voltar a
+   * ficar visível: cobre o caso extremo em que o navegador chegou a
+   * suspender o JS por completo em segundo plano (nem o polling nem o
+   * timeout dedicado rodaram) — como o cálculo é sempre por timestamp,
+   * não importa quanto tempo passou, o alarme dispara na hora certa assim
+   * que o app volta a rodar. Não faz nada se o cronômetro não estiver rodando.
+   */
+  forceCheck() {
+    if (this._state === TimerState.RUNNING) this._tick();
   }
 
   // ---------- Consultas ----------
@@ -260,12 +289,39 @@ export class CountdownTimer {
   _scheduleTicks() {
     this._clearTicks();
     this._intervalId = setInterval(() => this._tick(), this._tickIntervalMs);
+    this._scheduleFinishTimeout();
   }
 
   _clearTicks() {
     if (this._intervalId != null) {
       clearInterval(this._intervalId);
       this._intervalId = null;
+    }
+    this._clearFinishTimeout();
+  }
+
+  /**
+   * Agenda um setTimeout único, para o instante exato em que o cronômetro
+   * termina — em paralelo ao polling de _scheduleTicks() (usado só para
+   * atualizar a UI a cada 250ms). Existe porque, com a aba em segundo
+   * plano, navegadores throttlam MUITO mais agressivamente um intervalo
+   * repetido de disparo curto do que um timeout avulso: o polling sozinho
+   * podia deixar o app minutos sem perceber que o tempo acabou (e, com
+   * isso, sem tocar o alarme) até a aba voltar ao primeiro plano. Um
+   * timeout dedicado, agendado direto para a hora certa, tende a dessa
+   * forma disparar bem mais perto do previsto mesmo em segundo plano.
+   */
+  _scheduleFinishTimeout() {
+    this._clearFinishTimeout();
+    if (this._state !== TimerState.RUNNING) return;
+    const remaining = this._computeRemaining();
+    this._finishTimeoutId = setTimeout(() => this._tick(), Math.max(0, _realDelayFor(remaining)));
+  }
+
+  _clearFinishTimeout() {
+    if (this._finishTimeoutId != null) {
+      clearTimeout(this._finishTimeoutId);
+      this._finishTimeoutId = null;
     }
   }
 
