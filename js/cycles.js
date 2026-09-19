@@ -104,6 +104,26 @@ export function aggregateCyclesByConfig(sessions) {
 }
 
 /**
+ * Conta quantos CICLOS distintos existem numa lista de registros. Um ciclo
+ * pausado e retomado várias vezes gera vários registros (um por período de
+ * execução), todos com o mesmo cycleId — e deve contar como um só.
+ * Registros sem cycleId (legado, ou usos puramente matemáticos deste módulo)
+ * usam o id; sem id nenhum, cada registro conta como um ciclo próprio.
+ * @param {Array<{cycleId?: string, id?: string}>} sessions
+ * @returns {number}
+ */
+export function countDistinctCycles(sessions) {
+  const keys = new Set();
+  let anonymous = 0;
+  for (const s of sessions) {
+    const key = s.cycleId ?? s.id;
+    if (key == null) anonymous += 1;
+    else keys.add(key);
+  }
+  return keys.size + anonymous;
+}
+
+/**
  * Resumo agregado de todas as sessões de um dia (ou de qualquer conjunto):
  * tempo total estudado, ciclos completos somados (por configuração) e
  * equivalência em uma duração de referência à escolha.
@@ -130,7 +150,7 @@ export function computeDailySummary(sessions, referenceCycleMs = 50 * 60 * 1000)
     totalStudiedMs,
     totalCompleteCycles,
     equivalentCycles,
-    sessionCount: sessions.length,
+    sessionCount: countDistinctCycles(sessions),
     byConfig,
   };
 }

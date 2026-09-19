@@ -11,14 +11,30 @@
  * onTick, onSessionSaved). Toda regra de negócio do prompt mora aqui:
  *   - proporção padrão 5:1 entre estudo e descanso (seção 2);
  *   - estudo nunca diminui, descanso pode aumentar ou diminuir (seções 3 e 5);
- *   - contabilização do ciclo ao terminar o estudo (seção 4);
+ *   - contabilização do estudo por PERÍODOS DE EXECUÇÃO (ver abaixo);
  *   - alerta sonoro de até 10s, interrompível, em ambas as finalizações
  *     (seções 4 e 6);
  *   - novas configurações não apagam sessões/ciclos anteriores (seções 2 e 8).
+ *
+ * ---------- Contabilização por períodos de execução ----------
+ * Um ciclo de estudo pode ser pausado e retomado quantas vezes for preciso,
+ * inclusive em dias diferentes. Cada trecho em que o cronômetro REALMENTE
+ * esteve rodando é um período, com dateStart (início ou retomada) e dateEnd
+ * (pausa ou fim do ciclo). Regras:
+ *   1. Um período abre quando o cronômetro passa a rodar (iniciar/retomar).
+ *   2. Fecha quando ele para de rodar (pausar, sair pela seta, reiniciar,
+ *      trocar de configuração, ou o ciclo terminar) — e nesse momento, e só
+ *      nesse, o tempo dateEnd - dateStart é gravado no histórico, no(s) dia(s)
+ *      em que decorreu (o que atravessa a meia-noite é repartido).
+ *   3. Enquanto o ciclo está pausado, NADA é contabilizado: virar o dia, ligar
+ *      o PC ou abrir o app não geram tempo de estudo. O tempo restante do
+ *      ciclo nunca é creditado por antecipação.
+ *   4. Como cada período é gravado ao fechar, o que já foi contabilizado nunca
+ *      é contabilizado de novo — não existe mais "checkpoint" a reconciliar.
  */
 
-import { CountdownTimer, TimerState } from './timer.js';
-import { createSessionRecord, saveCompletedSession } from './history.js';
+import { CountdownTimer, TimerState, clockNow, clockToRealTime } from './timer.js';
+import { saveStudySegment, splitIntervalByLocalDay, getTodayDateKey } from './history.js';
 import {
   loadSettings,
   saveSettings,
@@ -46,10 +62,17 @@ export function computeDefaultRestMs(studyMs) {
   return Math.round(studyMs / STUDY_REST_RATIO);
 }
 
-// Snapshot é persistido no máximo a cada N ticks para não sobrecarregar o
-// localStorage com escritas a cada 250ms — ainda assim persiste com
-// frequência suficiente para não perder mais que ~1s de precisão num reload.
-const SNAPSHOT_PERSIST_EVERY_N_TICKS = 4;
+// Versão do formato do estado persistido (appState). Ausente = formato antigo,
+// baseado em "checkpoint" — ver _settleStudyPeriodOnRestore().
+const ACCOUNTING_VERSION = 2;
+
+// O snapshot é persistido no máximo uma vez por este intervalo (tempo REAL),
+// para não escrever no localStorage a cada tick de 250ms. Baseado em tempo, e
+// não em contagem de ticks, porque com a aba em segundo plano o navegador
+// espaça os ticks (até ~1 por minuto): contar ticks deixaria o "último
+// batimento" salvo defasado em vários minutos, e é ele que define até onde
+// um período conta como executado se o app for fechado sem aviso.
+const SNAPSHOT_PERSIST_MIN_INTERVAL_MS = 1000;
 
 export class PomodoroApp {
   /**
@@ -66,9 +89,9 @@ export class PomodoroApp {
     this._settings = { studyMs: DEFAULT_STUDY_MS, restMs: DEFAULT_REST_MS };
     this._phase = Phase.CONFIG;
     this._timer = null;
-    this._studyStartTimestamp = null; // início da tentativa de estudo atual (para o registro de sessão)
-    this._studyCheckpointMs = 0; // quanto do estudo atual já foi salvo no histórico (evita contar 2x ao sair/voltar)
-    this._tickCounter = 0;
+    this._cycleId = null;   // identifica o ciclo atual; todos os períodos dele no histórico compartilham este id
+    this._runPeriod = null; // período de execução em aberto: { startClock } (relógio do cronômetro) — null se o estudo não está rodando
+    this._lastPersistAt = 0;
   }
 
   /**
@@ -84,11 +107,13 @@ export class PomodoroApp {
 
     if (savedAppState && (savedAppState.phase === Phase.STUDY || savedAppState.phase === Phase.REST)) {
       const snapshot = await loadTimerSnapshot();
-      this._phase = savedAppState.phase;
-      this._studyStartTimestamp = savedAppState.studyStartTimestamp ?? null;
-      this._studyCheckpointMs = savedAppState.studyCheckpointMs ?? 0;
       if (snapshot) {
-        this._restoreTimerFromSnapshot(snapshot);
+        this._phase = savedAppState.phase;
+        this._cycleId = savedAppState.cycleId ?? _newCycleId();
+        this._runPeriod = savedAppState.runStartClock != null
+          ? { startClock: savedAppState.runStartClock }
+          : null;
+        await this._restoreTimerFromSnapshot(snapshot, savedAppState);
         return;
       }
     }
@@ -108,10 +133,10 @@ export class PomodoroApp {
 
   /**
    * Define uma nova configuração de estudo/descanso. Trata como uma nova
-   * sessão/configuração: se houver um estudo em andamento não finalizado,
-   * ele é encerrado e registrado como sessão parcial antes de trocar
-   * (preservando o cálculo de ciclo parcial descrito na seção 7 do prompt).
-   * Não apaga nenhuma sessão anterior do histórico.
+   * sessão/configuração: se houver um período de estudo em execução, ele é
+   * fechado e registrado antes de trocar (o que já tinha sido registrado em
+   * pausas anteriores permanece). Não apaga nenhuma sessão anterior do
+   * histórico.
    * @param {number} studyMs
    * @param {number} restMs
    */
@@ -140,57 +165,61 @@ export class PomodoroApp {
   /** Inicia um novo ciclo de estudo com a configuração atual. */
   startStudy() {
     unlockAudio(); // aproveita este clique do usuário para destravar o áudio para o alerta futuro
-    this._studyStartTimestamp = Date.now();
-    this._studyCheckpointMs = 0;
+    this._cycleId = _newCycleId();
     this._timer = new CountdownTimer({
       durationMs: this._settings.studyMs,
       allowDecrease: false, // regra da seção 3: tempo de estudo nunca diminui
       onTick: (remaining, total) => this._handleTick(remaining, total),
       onFinish: () => this._handleStudyFinished(),
     });
+    this._beginRunPeriod();
     this._timer.start();
     this._setPhase(Phase.STUDY);
     this._persistSnapshotNow();
   }
 
+  /**
+   * Pausa o estudo. Fecha o período de execução em aberto e registra no
+   * histórico exatamente o tempo em que o cronômetro esteve rodando; o ciclo
+   * continua inacabado e pausado, e nada mais é contabilizado até retomar.
+   * @returns {Promise<void>} resolve quando o período já foi gravado
+   */
   pauseStudy() {
     this._requirePhase(Phase.STUDY);
+    if (this._timer.getState() !== TimerState.RUNNING) return Promise.resolve();
+
+    const period = this._closeRunPeriod();
     this._timer.pause();
     this._persistSnapshotNow();
+    return this._savePeriod(period);
   }
 
+  /** Retoma o estudo pausado, abrindo um NOVO período de execução. */
   resumeStudy() {
     this._requirePhase(Phase.STUDY);
+    const state = this._timer.getState();
+    if (state !== TimerState.PAUSED && state !== TimerState.IDLE) return;
+
+    this._beginRunPeriod();
     this._timer.resume();
     this._persistSnapshotNow();
   }
 
   /**
-   * Reinicia o ciclo de estudo atual. O tempo já estudado até este ponto NÃO é
-   * perdido: é finalizado e salvo no histórico como uma sessão (igual ao que
-   * acontece ao trocar de configuração em configure()) antes de o cronômetro
-   * voltar ao tempo total configurado para uma nova tentativa.
+   * Reinicia o ciclo de estudo atual. O tempo já estudado NÃO é perdido: o
+   * que já foi registrado em pausas anteriores permanece, e o período em
+   * execução (se o cronômetro estava rodando) é fechado e registrado agora.
+   * Depois disso o cronômetro volta ao tempo total configurado, parado, como
+   * um NOVO ciclo (novo cycleId).
    */
   async resetStudy() {
     this._requirePhase(Phase.STUDY);
 
-    const remaining = this._timer.getRemainingMs();
-    const configuredMs = this._timer.getTotalDurationMs();
-    const elapsedMs = configuredMs - remaining;
-    const deltaMs = elapsedMs - this._studyCheckpointMs; // só o que ainda não foi salvo (ex: pelo checkpoint da seta de voltar)
-    const endTimestamp = Date.now();
-
-    await this._finalizeStudySession({
-      studiedMs: deltaMs,
-      configuredMs,
-      endTimestamp,
-      startTimestampOverride: endTimestamp - deltaMs,
-    });
-
-    this._studyCheckpointMs = 0;
+    const period = this._closeRunPeriod();
     this._timer.reset();
-    this._studyStartTimestamp = Date.now();
+    this._cycleId = _newCycleId();
     this._persistSnapshotNow();
+    await this._savePeriod(period);
   }
 
   /**
@@ -198,6 +227,7 @@ export class PomodoroApp {
    * aceitos (regra da seção 3) — o próprio CountdownTimer, criado com
    * allowDecrease:false, já bloquearia negativos, mas validamos aqui
    * também para dar um erro claro em vez de uma falha silenciosa.
+   * Não afeta a contabilização: só o tempo de execução real é registrado.
    * @param {number} deltaMs - deve ser > 0 (ex: +1min ou +5min em ms)
    */
   addStudyTime(deltaMs) {
@@ -210,17 +240,13 @@ export class PomodoroApp {
   }
 
   async _handleStudyFinished() {
-    const configuredMs = this._timer.getTotalDurationMs();
-    const deltaMs = configuredMs - this._studyCheckpointMs; // completou 100%, mas parte já pode ter sido salva antes
-    const endTimestamp = Date.now();
-
-    await this._finalizeStudySession({
-      studiedMs: deltaMs,
-      configuredMs,
-      endTimestamp,
-      startTimestampOverride: endTimestamp - deltaMs,
-    });
-    this._studyCheckpointMs = 0;
+    // O período termina no instante em que o ciclo ERA para terminar, e não
+    // quando o app percebeu — se o tick de término chegar atrasado (aba em
+    // segundo plano, restauração), o intervalo entre os dois não é estudo.
+    const scheduledEnd = this._timer.getScheduledEndTimestamp();
+    const now = clockNow();
+    const period = this._closeRunPeriod(scheduledEnd != null ? Math.min(now, scheduledEnd) : now);
+    await this._savePeriod(period);
 
     this._destroyTimer();
     this._setPhase(Phase.STUDY_ALERT);
@@ -314,50 +340,33 @@ export class PomodoroApp {
   }
 
   /**
-   * Chamado ao sair pela seta de voltar durante o estudo: salva no
-   * histórico apenas o tempo REALMENTE decorrido desde o último checkpoint
-   * (evita contar de novo o que já tiver sido salvo antes, ex: se o usuário
-   * sair e voltar mais de uma vez no mesmo ciclo) e pausa o cronômetro.
-   * A sessão continua aberta (fase permanece STUDY) para poder ser
-   * retomada depois pelo botão "+" — só é encerrada de vez quando o
-   * usuário escolhe "Nova sessão" (finalizeStudyAndReturnToConfig()),
-   * reinicia o ciclo (resetStudy()) ou o estudo termina normalmente.
+   * Chamado ao sair pela seta de voltar durante o estudo: se o cronômetro
+   * estiver rodando, pausa (fechando e registrando o período em execução).
+   * A sessão continua aberta (fase permanece STUDY) para poder ser retomada
+   * depois pelo botão "+" — só é encerrada de vez quando o usuário escolhe
+   * "Nova sessão" (finalizeStudyAndReturnToConfig()), reinicia o ciclo
+   * (resetStudy()) ou o estudo termina normalmente.
    * Não faz nada se a fase atual não for STUDY.
    */
-  async checkpointAndPauseStudy() {
+  async pauseStudyIfRunning() {
     if (this._phase !== Phase.STUDY || !this._timer) return;
 
-    const remaining = this._timer.getRemainingMs();
-    const configuredMs = this._timer.getTotalDurationMs();
-    const elapsedMs = configuredMs - remaining;
-    const deltaMs = elapsedMs - this._studyCheckpointMs;
-
-    if (deltaMs > 0) {
-      const endTimestamp = Date.now();
-      await this._finalizeStudySession({
-        studiedMs: deltaMs,
-        configuredMs,
-        endTimestamp,
-        startTimestampOverride: endTimestamp - deltaMs,
-      });
-      this._studyCheckpointMs = elapsedMs;
-    }
-
     if (this._timer.getState() === TimerState.RUNNING) {
-      this._timer.pause();
+      await this.pauseStudy();
+    } else {
+      this._persistSnapshotNow();
     }
-    this._persistSnapshotNow();
   }
 
   /**
-   * Finaliza o estudo em andamento (se houver), salvando a sessão parcial
-   * no histórico, e volta a fase para CONFIG — sem alterar as configurações
+   * Finaliza o estudo em andamento (se houver), registrando o período que
+   * estiver aberto, e volta a fase para CONFIG — sem alterar as configurações
    * salvas (diferente de configure(), não recebe nova duração).
    *
    * Usado quando o usuário, ao ver o modal de "sessão inacabada" (disparado
    * pelo botão "+"), escolhe começar uma nova sessão em vez de continuar a
-   * anterior — a sessão pausada é registrada no histórico antes de abrir a
-   * tela de configuração.
+   * anterior. O tempo do ciclo abandonado já está todo no histórico (cada
+   * período foi gravado ao fechar); nada é somado por causa do abandono.
    *
    * Não faz nada se a fase atual não for STUDY — descanso não é finalizado
    * por aqui, continua rodando em segundo plano normalmente.
@@ -402,11 +411,33 @@ export class PomodoroApp {
   }
 
   /**
+   * Tempo de estudo do período em execução que ainda NÃO está no histórico
+   * (só a parte que cai em hoje, caso o período tenha atravessado a
+   * meia-noite). É 0 com o ciclo pausado. A UI soma isto ao total de hoje já
+   * gravado para mostrar "Estudado hoje" ao vivo, sem contar duas vezes o que
+   * pausas anteriores já registraram.
+   * @returns {number} ms
+   */
+  getOpenRunPeriodTodayMs() {
+    if (!this._runPeriod) return 0;
+
+    const endClock = clockNow();
+    const durationMs = endClock - this._runPeriod.startClock;
+    if (!(durationMs > 0)) return 0;
+
+    const dateEnd = clockToRealTime(endClock);
+    const todayKey = getTodayDateKey();
+    return splitIntervalByLocalDay(dateEnd - durationMs, dateEnd)
+      .filter((chunk) => chunk.dateKey === todayKey)
+      .reduce((total, chunk) => total + chunk.ms, 0);
+  }
+
+  /**
    * Força a persistência imediata do snapshot atual (fase + cronômetro),
-   * sem esperar o intervalo normal de ticks (SNAPSHOT_PERSIST_EVERY_N_TICKS).
-   * Usado ao detectar que a aba está sendo escondida/fechada, para não
-   * arriscar perder até ~1s de progresso — vale independente de quanto
-   * tempo já se passou na sessão atual (mesmo poucos segundos são salvos).
+   * sem esperar o intervalo normal de persistência. Usado ao detectar que a
+   * aba está sendo escondida/fechada. Não fecha o período em execução: o
+   * cronômetro continua rodando em segundo plano, e o snapshot serve de
+   * "último batimento" caso o app seja encerrado sem aviso.
    * Não faz nada se não houver fase de estudo/descanso ativa.
    */
   persistNow() {
@@ -431,80 +462,168 @@ export class PomodoroApp {
     stopAllAlerts();
   }
 
-  // ---------- Internos ----------
+  // ---------- Períodos de execução ----------
+
+  /** Abre um período de execução: o cronômetro de estudo está prestes a rodar. */
+  _beginRunPeriod() {
+    this._runPeriod = { startClock: clockNow() };
+  }
 
   /**
-   * Se houver um estudo em andamento (rodando ou pausado) ainda não
-   * finalizado, encerra-o agora e salva como sessão parcial — é o que
-   * permite o cenário da seção 7/8 do prompt: trocar de configuração no
-   * meio do dia sem perder o progresso já estudado naquele tempo.
+   * Fecha o período de execução em aberto (se houver) e devolve o que deve ser
+   * gravado no histórico — sem gravar. Síncrono de propósito: quem chama
+   * captura o período no mesmo instante em que o cronômetro para, e só depois
+   * espera a gravação (_savePeriod).
+   * @param {number} [endClock] - fim do período no relógio do cronômetro (padrão: agora)
+   * @returns {{dateStart: number, dateEnd: number, configuredMs: number, restMs: number, cycleId: string} | null}
+   */
+  _closeRunPeriod(endClock = clockNow()) {
+    const period = this._runPeriod;
+    this._runPeriod = null;
+    if (!period || !this._timer) return null;
+
+    const durationMs = endClock - period.startClock;
+    if (!(durationMs > 0)) return null;
+
+    const dateEnd = clockToRealTime(endClock);
+    return {
+      dateStart: dateEnd - durationMs,
+      dateEnd,
+      configuredMs: this._timer.getTotalDurationMs(),
+      restMs: this._settings.restMs,
+      cycleId: this._cycleId,
+    };
+  }
+
+  /**
+   * Grava um período já fechado. saveStudySegment reparte por dia local: se
+   * o período atravessou a meia-noite, salva um registro por dia, cada um só
+   * com o tempo que realmente decorreu naquele dia (ver history.js).
+   */
+  async _savePeriod(period) {
+    if (!period) return;
+    const records = await saveStudySegment(period);
+    records.forEach((record) => this._onSessionSaved(record));
+  }
+
+  /**
+   * Se houver um período de estudo em execução, fecha-o agora e grava — é o
+   * que permite trocar de configuração no meio do dia sem perder o que o
+   * cronômetro estava contando. Se o ciclo estiver pausado não há nada a
+   * gravar: o que foi estudado já foi registrado quando ele pausou.
    */
   async _finalizeStudyIfInProgress() {
     if (this._phase !== Phase.STUDY || !this._timer) return;
-
-    const remaining = this._timer.getRemainingMs();
-    const configuredMs = this._timer.getTotalDurationMs();
-    const elapsedMs = configuredMs - remaining;
-    const deltaMs = elapsedMs - this._studyCheckpointMs;
-    const endTimestamp = Date.now();
-
-    await this._finalizeStudySession({
-      studiedMs: deltaMs,
-      configuredMs,
-      endTimestamp,
-      startTimestampOverride: endTimestamp - deltaMs,
-    });
-    this._studyCheckpointMs = 0;
+    await this._savePeriod(this._closeRunPeriod());
   }
 
-  async _finalizeStudySession({ studiedMs, configuredMs, endTimestamp, startTimestampOverride }) {
-    if (studiedMs <= 0) return; // nada de novo desde o último checkpoint, não vale registrar
-
-    const record = createSessionRecord({
-      startTimestamp: startTimestampOverride ?? this._studyStartTimestamp ?? endTimestamp - studiedMs,
-      endTimestamp,
-      configuredMs,
-      studiedMs,
-      restMs: this._settings.restMs,
-    });
-
-    await saveCompletedSession(record);
-    this._onSessionSaved(record);
-  }
+  // ---------- Internos ----------
 
   _handleTick(remaining, total) {
     this._onTick(remaining, total);
-    this._tickCounter += 1;
-    if (this._tickCounter % SNAPSHOT_PERSIST_EVERY_N_TICKS === 0) {
+    if (Date.now() - this._lastPersistAt >= SNAPSHOT_PERSIST_MIN_INTERVAL_MS) {
       this._persistSnapshotNow();
     }
   }
 
-  _restoreTimerFromSnapshot(snapshot) {
-    const onFinish = this._phase === Phase.STUDY
+  /**
+   * Restaura o cronômetro a partir do snapshot salvo.
+   *
+   * ESTUDO: o tempo em que o app ficou fechado (PC desligado, aba fechada,
+   * virada de dia) NÃO conta como execução. O cronômetro é restaurado como
+   * estava no último batimento salvo (snapshot.savedClockAt), e, se um período
+   * estava aberto, ele é fechado e gravado nesse instante. O ciclo volta
+   * pausado, inclusive se foi deixado de um dia para o outro — pode ser
+   * retomado normalmente; só o que rodar a partir da retomada será contado.
+   *
+   * DESCANSO: não entra na contabilização de estudo; mantém o comportamento
+   * antigo (continua contando pelo relógio enquanto o app esteve fechado).
+   */
+  async _restoreTimerFromSnapshot(snapshot, savedAppState) {
+    const isStudy = this._phase === Phase.STUDY;
+    const heartbeatClock = snapshot.savedClockAt ?? snapshot.savedAt ?? clockNow();
+
+    const onFinish = isStudy
       ? () => this._handleStudyFinished()
       : () => this._handleRestFinished();
 
-    this._timer = CountdownTimer.restore(snapshot, {
-      onTick: (remaining, total) => this._handleTick(remaining, total),
-      onFinish,
-    });
+    this._timer = CountdownTimer.restore(
+      snapshot,
+      {
+        onTick: (remaining, total) => this._handleTick(remaining, total),
+        onFinish,
+      },
+      isStudy ? { asOfMs: heartbeatClock } : {}
+    );
+
+    if (isStudy) {
+      await this._settleStudyPeriodOnRestore(snapshot, savedAppState, heartbeatClock);
+    }
 
     this._onPhaseChange(this._phase);
+    this._persistSnapshotNow(); // regrava já no formato atual
 
-    // Se o tempo já tiver se esgotado enquanto a aba estava fechada,
+    // Se o tempo já tiver se esgotado (no último batimento, para o estudo),
     // finaliza imediatamente (regra descrita em timer.js/restore()).
     if (this._timer.isFinished()) {
-      if (this._phase === Phase.STUDY) this._handleStudyFinished();
+      if (isStudy) await this._handleStudyFinished();
       else this._handleRestFinished();
     }
   }
 
+  /**
+   * Fecha, ao restaurar, o período de estudo que ficou em aberto no snapshot.
+   *
+   * Formato atual: o período é fechado no último batimento (o app não estava
+   * mais rodando depois disso). Se o cronômetro já tinha chegado ao fim nesse
+   * ponto, o período é deixado aberto para _handleStudyFinished() fechá-lo no
+   * término previsto.
+   *
+   * Formato antigo (sem accountingVersion): o estado não tinha períodos, só um
+   * "checkpoint" do quanto do ciclo já havia sido gravado. Para não perder o
+   * que ficou sem registro no momento da atualização — inclusive um ciclo
+   * pausado à noite, que o código antigo nunca gravava ao pausar —, grava-se
+   * uma única vez a diferença (tempo decorrido do ciclo - checkpoint),
+   * terminando no instante em que o snapshot foi salvo, ou seja, no dia em
+   * que o estudo de fato aconteceu.
+   */
+  async _settleStudyPeriodOnRestore(snapshot, savedAppState, heartbeatClock) {
+    const isCurrentFormat = savedAppState.accountingVersion === ACCOUNTING_VERSION;
+
+    if (isCurrentFormat) {
+      if (this._runPeriod && !this._timer.isFinished()) {
+        await this._savePeriod(this._closeRunPeriod(heartbeatClock));
+      }
+      return;
+    }
+
+    // ----- formato antigo -----
+    this._runPeriod = null;
+
+    const remainingMs = snapshot.state === TimerState.RUNNING
+      ? CountdownTimer.computeRemainingMsFromSnapshot(snapshot, heartbeatClock)
+      : snapshot.remainingAtPause;
+    const elapsedMs = snapshot.totalDuration - remainingMs;
+    const unrecordedMs = elapsedMs - (savedAppState.studyCheckpointMs ?? 0);
+    if (!(unrecordedMs > 0)) return;
+
+    const dateEnd = snapshot.savedAt ?? Date.now();
+    await this._savePeriod({
+      dateStart: dateEnd - unrecordedMs,
+      dateEnd,
+      configuredMs: snapshot.totalDuration,
+      restMs: this._settings.restMs,
+      cycleId: this._cycleId,
+    });
+  }
+
   _persistSnapshotNow() {
+    this._lastPersistAt = Date.now();
     saveAppState({
+      accountingVersion: ACCOUNTING_VERSION,
       phase: this._phase,
-      studyStartTimestamp: this._studyStartTimestamp,
-      studyCheckpointMs: this._studyCheckpointMs,
+      cycleId: this._cycleId,
+      runStartClock: this._runPeriod ? this._runPeriod.startClock : null,
     });
     if (this._timer) {
       saveTimerSnapshot(this._timer.serialize());
@@ -537,4 +656,8 @@ function _assertPositiveMs(value, name) {
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(`${name} deve ser um número positivo em milissegundos.`);
   }
+}
+
+function _newCycleId() {
+  return `cycle-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }

@@ -10,7 +10,7 @@
  * servindo a versão antiga do cache.
  */
 
-const CACHE_VERSION = 'pomodoro-v1';
+const CACHE_VERSION = 'pomodoro-v6';
 
 const CORE_ASSETS = [
   './',
@@ -31,6 +31,12 @@ const CORE_ASSETS = [
   './img/icon-192.png',
   './img/icon-512.png',
   './img/icon-512-maskable.png',
+  './img/icon-download.png',
+  './img/icon-upload.png',
+  './img/icon-trash.png',
+  './img/icon-chart.png',
+  './img/icon-settings.png',
+  './img/icon-new-cycle.png',
 ];
 
 self.addEventListener('install', (event) => {

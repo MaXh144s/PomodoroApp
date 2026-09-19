@@ -33,13 +33,39 @@
     </div>
   </div>
 
+  <!-- Confirmação de exclusão de histórico (lixeira) -->
+  <div id="modal-delete-history" class="modal-overlay" hidden>
+    <div class="card alert-box modal-card">
+      <h2 id="modal-delete-title">Excluir histórico</h2>
+      <p class="modal-detail">Você tem certeza que deseja excluir este dia?</p>
+      <div id="modal-delete-details" class="modal-detail modal-delete-details"></div>
+      <p class="modal-detail modal-delete-note">Isso remove os registros do histórico atual. Se você exportou um backup em JSON antes desta exclusão, poderá recuperá-los importando esse arquivo depois.</p>
+      <div class="alert-actions">
+        <button id="btn-delete-history-cancel" class="btn btn-secondary">Cancelar</button>
+        <button id="btn-delete-history-confirm" class="btn btn-danger">Excluir</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Prévia/confirmação de importação de histórico JSON -->
+  <div id="modal-import-history" class="modal-overlay" hidden>
+    <div class="card alert-box modal-card">
+      <h2>Importar histórico</h2>
+      <div id="modal-import-details" class="modal-detail modal-delete-details"></div>
+      <div class="alert-actions">
+        <button id="btn-import-history-cancel" class="btn btn-secondary">Cancelar</button>
+        <button id="btn-import-history-confirm" class="btn btn-primary" disabled>Importar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ===================== TELA INICIAL ===================== -->
   <section id="view-home" class="view">
     <header class="home-header">
       <h1>Pomodoro</h1>
       <div class="home-header-actions">
-        <button id="btn-chart" class="btn-icon" title="Gráfico da semana" aria-label="Gráfico da semana">📊</button>
-        <button id="btn-preferences" class="btn-icon" title="Preferências" aria-label="Preferências">⚙️</button>
+        <button id="btn-chart" class="btn-icon" title="Gráfico da semana" aria-label="Gráfico da semana"><img src="./img/icon-chart.png" alt="" class="header-icon-img"></button>
+        <button id="btn-preferences" class="btn-icon" title="Preferências" aria-label="Preferências"><img src="./img/icon-settings.png" alt="" class="header-icon-img"></button>
         <button id="btn-new" class="fab" title="Novo temporizador" aria-label="Novo temporizador">+</button>
       </div>
     </header>
@@ -62,8 +88,37 @@
       <p id="home-equivalence" class="summary-equivalence"></p>
     </div>
 
+    <details class="card history-manage-card">
+      <summary class="history-manage-summary">
+        <span class="card-title">Gerenciar histórico</span>
+        <span class="history-manage-chevron" aria-hidden="true">▾</span>
+      </summary>
+      <div class="history-manage-actions">
+        <button id="btn-history-export" class="btn btn-chip">
+          <img src="./img/icon-download.png" alt="" class="btn-icon-img">
+          Exportar JSON
+        </button>
+        <button id="btn-history-import" class="btn btn-chip">
+          <img src="./img/icon-upload.png" alt="" class="btn-icon-img">
+          Importar JSON
+        </button>
+        <button id="btn-history-trash" class="btn btn-chip">
+          <img src="./img/icon-trash.png" alt="" class="btn-icon-img">
+          Lixeira
+        </button>
+      </div>
+      <input type="file" id="input-history-import-file" accept="application/json,.json" hidden>
+    </details>
+
     <div id="home-history" class="card history-card" hidden>
-      <p class="card-title">Histórico</p>
+      <div class="history-card-header">
+        <p class="card-title">Histórico</p>
+        <div id="history-selection-actions" class="history-selection-actions" hidden>
+          <span id="history-selection-count" class="history-selection-count"></span>
+          <button id="btn-history-delete-selected" class="btn btn-danger" disabled>Excluir</button>
+          <button id="btn-history-selection-cancel" class="btn btn-chip">Cancelar</button>
+        </div>
+      </div>
       <ul id="home-history-list" class="history-list"></ul>
     </div>
   </section>

@@ -7,7 +7,18 @@
  */
 
 import { PomodoroApp, Phase } from './appstate.js';
-import { getTodaySummary, getFullHistorySummary, buildDailySummaryLabels, getLastNDaysSummary, getTodayDateKey } from './history.js';
+import {
+  getTodaySummary,
+  getFullHistorySummary,
+  buildDailySummaryLabels,
+  getLastNDaysSummary,
+  getTodayDateKey,
+  getSessionsForDate,
+  deleteSessionsForDates,
+  buildHistoryBackup,
+  validateHistoryBackup,
+  commitHistoryImport,
+} from './history.js';
 import { computeCycleProgress, computeEquivalentCycles, formatDuration, formatCycleCount } from './cycles.js';
 import {
   getDefaultPreferences,
@@ -28,8 +39,9 @@ const RING_CIRCUMFERENCE = 2 * Math.PI * 90; // deve bater com o raio do SVG em 
 const CHART_VALUE_ROW_HEIGHT_PX = 18; // 14px de altura do texto + 4px de margem
 const CHART_TRACK_HEIGHT_PX = 160;
 
-// Cache do tempo total estudado hoje (somente sessões já concluídas, sem
-// contar a sessão em andamento). Evita ler e parsear o histórico inteiro do
+// Cache do tempo total estudado hoje (somente períodos já gravados no
+// histórico, sem contar o período que está rodando agora — esse a UI pega ao
+// vivo em app.getOpenRunPeriodTodayMs()). Evita ler e parsear o histórico inteiro do
 // localStorage a cada tick do cronômetro (4x/seg) — feito assim antes, isso
 // empilhava dezenas de milhares de leituras assíncronas ao longo de várias
 // horas encadeando sessões, e "Estudado hoje" acabava travando. Agora só é
@@ -70,6 +82,26 @@ const el = {
   homeEquivalence: document.getElementById('home-equivalence'),
   homeHistory: document.getElementById('home-history'),
   homeHistoryList: document.getElementById('home-history-list'),
+
+  btnHistoryExport: document.getElementById('btn-history-export'),
+  btnHistoryImport: document.getElementById('btn-history-import'),
+  inputHistoryImportFile: document.getElementById('input-history-import-file'),
+  btnHistoryTrash: document.getElementById('btn-history-trash'),
+  historySelectionActions: document.getElementById('history-selection-actions'),
+  historySelectionCount: document.getElementById('history-selection-count'),
+  btnHistoryDeleteSelected: document.getElementById('btn-history-delete-selected'),
+  btnHistorySelectionCancel: document.getElementById('btn-history-selection-cancel'),
+
+  modalDeleteHistory: document.getElementById('modal-delete-history'),
+  modalDeleteTitle: document.getElementById('modal-delete-title'),
+  modalDeleteDetails: document.getElementById('modal-delete-details'),
+  btnDeleteHistoryCancel: document.getElementById('btn-delete-history-cancel'),
+  btnDeleteHistoryConfirm: document.getElementById('btn-delete-history-confirm'),
+
+  modalImportHistory: document.getElementById('modal-import-history'),
+  modalImportDetails: document.getElementById('modal-import-details'),
+  btnImportHistoryCancel: document.getElementById('btn-import-history-cancel'),
+  btnImportHistoryConfirm: document.getElementById('btn-import-history-confirm'),
 
   btnChartBack: document.getElementById('btn-chart-back'),
   chartPlotInner: document.getElementById('chart-plot-inner'),
@@ -137,9 +169,13 @@ const app = new PomodoroApp({
   onPhaseChange: (phase) => renderForPhase(phase),
   onTick: (remainingMs, totalMs) => renderTick(remainingMs, totalMs),
   onSessionSaved: () => {
-    // Mantém o cache de "estudado hoje" em dia sempre que uma sessão é
-    // gravada (concluída ou finalizada por Reiniciar/nova configuração).
-    refreshTodayBase();
+    // Mantém o cache de "estudado hoje" em dia sempre que um período é
+    // gravado (pausa, fim do ciclo, Reiniciar, nova configuração). Redesenha
+    // o total logo em seguida: ao pausar não há mais ticks para fazê-lo, e o
+    // tempo acabou de migrar de "período em execução" para "já gravado".
+    refreshTodayBase().then(() => {
+      if (app.getPhase() === Phase.STUDY) renderCycleInfo();
+    });
   },
 });
 
@@ -590,7 +626,43 @@ async function renderHome() {
   el.homeSessions.textContent = String(labels.sessionCount);
   el.homeEquivalence.textContent = todaySummary.totalStudiedMs > 0 ? labels.equivalence : '';
 
-  const fullHistory = await getFullHistorySummary();
+  // Uma nova entrada na tela inicial sempre começa fora do modo de seleção
+  // da lixeira — inclusive depois de uma exclusão/importação, já que ambas
+  // terminam chamando renderHome() de novo.
+  _exitHistorySelectionMode();
+
+  lastFullHistorySummary = await getFullHistorySummary();
+  el.btnHistoryTrash.disabled = lastFullHistorySummary.length === 0;
+  _renderHistoryList();
+}
+
+function _formatDateLabel(dateKey) {
+  const [year, month, day] = dateKey.split('-');
+  return `${day}/${month}/${year}`;
+}
+
+function _formatTime(timestamp) {
+  const d = new Date(timestamp);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+// ---------- Gerenciamento do histórico (exportar / importar / lixeira) ----------
+//
+// Tudo aqui opera sobre o mesmo histórico de sessões já usado pelo resto do
+// app (history.js/storage.js) — não existe uma lista paralela. O modo de
+// seleção só existe enquanto a lixeira está aberta; a exclusão em si
+// (deleteSessionsForDates) e a importação (validateHistoryBackup +
+// commitHistoryImport) vivem em history.js.
+
+let lastFullHistorySummary = [];
+let historySelectionMode = false;
+const selectedHistoryDates = new Set();
+let pendingDeleteDateKeys = null;
+let pendingImportSessions = null;
+
+function _renderHistoryList() {
+  const fullHistory = lastFullHistorySummary;
+
   if (fullHistory.length === 0) {
     el.homeHistory.hidden = true;
     el.homeHistoryList.innerHTML = '';
@@ -601,23 +673,200 @@ async function renderHome() {
   el.homeHistoryList.innerHTML = fullHistory
     .map((day) => {
       const dayLabels = buildDailySummaryLabels(day);
+      const checkbox = historySelectionMode
+        ? `<input type="checkbox" class="history-select-checkbox" data-date-key="${day.dateKey}" ${selectedHistoryDates.has(day.dateKey) ? 'checked' : ''} aria-label="Selecionar ${_formatDateLabel(day.dateKey)}">`
+        : '';
       return `
-        <li>
-          <span>
-            <span class="history-date">${_formatDateLabel(day.dateKey)}</span><br>
-            <span class="history-detail">${day.sessionCount} sessão(ões) · ${dayLabels.totalCompleteCycles} ciclos completos</span>
-          </span>
+        <li data-date-key="${day.dateKey}">
+          <label class="history-item-label">
+            ${checkbox}
+            <span>
+              <span class="history-date">${_formatDateLabel(day.dateKey)}</span><br>
+              <span class="history-detail">${day.sessionCount} sessão(ões) · ${dayLabels.totalCompleteCycles} ciclos completos</span>
+            </span>
+          </label>
           <span class="history-detail">${dayLabels.totalStudiedLabel}</span>
         </li>
       `;
     })
     .join('');
+
+  if (historySelectionMode) {
+    el.homeHistoryList.querySelectorAll('.history-select-checkbox').forEach((checkbox) => {
+      checkbox.addEventListener('change', () => {
+        const dateKey = checkbox.dataset.dateKey;
+        if (checkbox.checked) selectedHistoryDates.add(dateKey);
+        else selectedHistoryDates.delete(dateKey);
+        _updateHistorySelectionUI();
+      });
+    });
+  }
 }
 
-function _formatDateLabel(dateKey) {
-  const [year, month, day] = dateKey.split('-');
-  return `${day}/${month}/${year}`;
+function _updateHistorySelectionUI() {
+  const count = selectedHistoryDates.size;
+  el.historySelectionCount.textContent = count > 0 ? `${count} selecionado(s)` : '';
+  el.btnHistoryDeleteSelected.disabled = count === 0;
 }
+
+function _exitHistorySelectionMode() {
+  historySelectionMode = false;
+  selectedHistoryDates.clear();
+  el.historySelectionActions.hidden = true;
+}
+
+el.btnHistoryTrash.addEventListener('click', () => {
+  if (lastFullHistorySummary.length === 0) return;
+  historySelectionMode = !historySelectionMode;
+  selectedHistoryDates.clear();
+  el.historySelectionActions.hidden = !historySelectionMode;
+  _updateHistorySelectionUI();
+  _renderHistoryList();
+});
+
+el.btnHistorySelectionCancel.addEventListener('click', () => {
+  _exitHistorySelectionMode();
+  _renderHistoryList();
+});
+
+// ---------- Exclusão (com confirmação mostrando o que será excluído) ----------
+
+el.btnHistoryDeleteSelected.addEventListener('click', async () => {
+  if (selectedHistoryDates.size === 0) return;
+  await _openDeleteHistoryModal(Array.from(selectedHistoryDates));
+});
+
+async function _openDeleteHistoryModal(dateKeys) {
+  pendingDeleteDateKeys = dateKeys;
+
+  el.modalDeleteTitle.textContent = dateKeys.length === 1
+    ? 'Excluir histórico do dia'
+    : `Excluir histórico de ${dateKeys.length} dias`;
+
+  const daysDetail = await Promise.all(dateKeys.map(async (dateKey) => {
+    const daySummary = lastFullHistorySummary.find((d) => d.dateKey === dateKey);
+    const labels = daySummary ? buildDailySummaryLabels(daySummary) : null;
+    const sessions = await getSessionsForDate(dateKey);
+    const periods = sessions
+      .slice()
+      .sort((a, b) => a.dateStart - b.dateStart)
+      .map((s) => `${_formatTime(s.dateStart)}–${_formatTime(s.dateEnd)} (${formatDuration(s.studiedMs)})`)
+      .join(', ') || '—';
+
+    return `
+      <p class="modal-delete-day">
+        <strong>${_formatDateLabel(dateKey)}</strong><br>
+        Tempo total estudado: ${labels ? labels.totalStudiedLabel : '—'}<br>
+        Ciclos completos: ${labels ? labels.totalCompleteCycles : 0}<br>
+        Sessões: ${daySummary ? daySummary.sessionCount : 0}<br>
+        Períodos de estudo: ${periods}
+      </p>
+    `;
+  }));
+
+  el.modalDeleteDetails.innerHTML = daysDetail.join('');
+  el.modalDeleteHistory.hidden = false;
+}
+
+function _closeDeleteHistoryModal() {
+  el.modalDeleteHistory.hidden = true;
+  pendingDeleteDateKeys = null;
+}
+
+el.btnDeleteHistoryCancel.addEventListener('click', _closeDeleteHistoryModal);
+
+el.btnDeleteHistoryConfirm.addEventListener('click', async () => {
+  if (!pendingDeleteDateKeys) return;
+  await deleteSessionsForDates(pendingDeleteDateKeys);
+  _closeDeleteHistoryModal();
+  await refreshTodayBase();
+  await renderHome();
+});
+
+// ---------- Exportar histórico (backup .json) ----------
+
+el.btnHistoryExport.addEventListener('click', async () => {
+  const backup = await buildHistoryBackup();
+  const json = JSON.stringify(backup, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `pomodoro-historico-${getTodayDateKey()}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+});
+
+// ---------- Importar histórico (backup .json) ----------
+
+el.btnHistoryImport.addEventListener('click', () => {
+  el.inputHistoryImportFile.value = '';
+  el.inputHistoryImportFile.click();
+});
+
+el.inputHistoryImportFile.addEventListener('change', async () => {
+  const file = el.inputHistoryImportFile.files[0];
+  if (!file) return;
+
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    _openImportModal({
+      isValid: false,
+      error: 'Não foi possível ler o arquivo: verifique se é um JSON válido.',
+    });
+    return;
+  }
+
+  _openImportModal(await validateHistoryBackup(parsed));
+});
+
+function _openImportModal(result) {
+  pendingImportSessions = result.isValid ? result.newSessions : null;
+
+  if (!result.isValid) {
+    el.modalImportDetails.innerHTML = `<p class="field-warning">${result.error}</p>`;
+    el.btnImportHistoryConfirm.disabled = true;
+  } else {
+    const parts = [`<p>${result.totalInFile} registro(s) encontrado(s) no arquivo.</p>`];
+    parts.push(`<p><strong>${result.newSessions.length}</strong> serão importados (novos, recuperados do backup).</p>`);
+    if (result.recoveredCount > 0) {
+      parts.push(`<p>${result.recoveredCount} deles são registros antigos (formato anterior) reconstruídos a partir das datas de início e término originais.</p>`);
+    }
+    if (result.duplicateCount > 0) {
+      parts.push(`<p>${result.duplicateCount} já existem no histórico atual e serão ignorados, sem duplicar.</p>`);
+    }
+    if (result.invalidCount > 0) {
+      parts.push(`<p class="field-warning">${result.invalidCount} registro(s) com estrutura inválida serão ignorados.</p>`);
+    }
+    if (result.newSessions.length === 0) {
+      parts.push('<p>Nada novo para importar.</p>');
+    }
+    el.modalImportDetails.innerHTML = parts.join('');
+    el.btnImportHistoryConfirm.disabled = result.newSessions.length === 0;
+  }
+
+  el.modalImportHistory.hidden = false;
+}
+
+function _closeImportModal() {
+  el.modalImportHistory.hidden = true;
+  pendingImportSessions = null;
+}
+
+el.btnImportHistoryCancel.addEventListener('click', _closeImportModal);
+
+el.btnImportHistoryConfirm.addEventListener('click', async () => {
+  if (!pendingImportSessions || pendingImportSessions.length === 0) return;
+  await commitHistoryImport(pendingImportSessions);
+  _closeImportModal();
+  await refreshTodayBase();
+  await renderHome();
+});
 
 // ---------- Gráfico semanal ----------
 
@@ -800,10 +1049,13 @@ el.btnNewSession.addEventListener('click', async () => {
   showConfigView();
 });
 
-el.btnNew.addEventListener('click', () => {
+el.btnNew.addEventListener('click', async () => {
   // Só se aplica ao estudo (não ao descanso): se houver uma sessão pausada
   // (deixada pela seta de voltar), pergunta se quer continuar ou começar
   // uma nova em vez de simplesmente descartar.
+  // Um ciclo pausado de um dia anterior também pode ser continuado: o que
+  // ele já estudou está gravado no dia em que aconteceu, e só o que rodar a
+  // partir da retomada será contado no dia da retomada.
   if (app.getPhase() === Phase.STUDY) {
     _openResumeModal();
     return;
@@ -952,7 +1204,9 @@ function renderCycleInfo() {
     ? `${progress.completeCycles} ciclo(s) + ${formatCycleCount(progress.partialFraction, 2)} concluído`
     : `${formatCycleCount(progress.partialFraction, 2)} ciclo concluído`;
 
-  el.timerTodayTotal.textContent = `Estudado hoje: ${formatDuration(todayBaseMs + studiedMs)}`;
+  // todayBaseMs já inclui todos os períodos gravados (inclusive de pausas
+  // anteriores deste mesmo ciclo); só falta somar o período em execução agora.
+  el.timerTodayTotal.textContent = `Estudado hoje: ${formatDuration(todayBaseMs + app.getOpenRunPeriodTodayMs())}`;
 }
 
 function updateToggleButtonLabel() {
@@ -997,14 +1251,14 @@ el.timeAdjustButtons.forEach((btn) => {
 });
 
 el.btnTimerHome.addEventListener('click', async () => {
-  // Durante o estudo, sair pela seta de voltar salva no histórico o tempo
-  // realmente decorrido até agora (e só esse tempo, sem contar de novo o
-  // que já tiver sido salvo antes) e pausa o cronômetro. A sessão continua
+  // Durante o estudo, sair pela seta de voltar pausa o cronômetro, o que
+  // fecha e grava o período que estava rodando (e só ele — o que já tiver
+  // sido gravado em pausas anteriores não é contado de novo). A sessão continua
   // aberta para ser retomada pelo botão "+" — só quem decide se continua
   // ou começa uma nova é o usuário, no modal. No descanso, o cronômetro
   // continua em segundo plano normalmente.
   if (app.getPhase() === Phase.STUDY) {
-    await app.checkpointAndPauseStudy();
+    await app.pauseStudyIfRunning();
     await refreshTodayBase();
   }
   showView('home', 'backward');

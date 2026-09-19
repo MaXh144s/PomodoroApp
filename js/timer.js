@@ -50,6 +50,31 @@ function _realDelayFor(remainingMs) {
   return remainingMs / scale;
 }
 
+/**
+ * Relógio usado pelo cronômetro (igual a Date.now() em uso normal; acelerado
+ * quando o painel de debug está ativo). Exportado para que quem contabiliza
+ * períodos de execução (appstate.js) meça o tempo na MESMA base que o
+ * cronômetro usa, senão o tempo registrado divergiria do tempo do timer
+ * quando o debug estiver acelerando o relógio.
+ */
+export function clockNow() {
+  return _now();
+}
+
+/**
+ * Converte um instante do relógio do cronômetro (valor de clockNow()) no
+ * instante real (Date.now()) correspondente — necessário para gravar datas
+ * de verdade no histórico. Sem o painel de debug os dois relógios são o
+ * mesmo e o valor volta idêntico (sem nenhum erro de arredondamento); com
+ * ele, desfaz a aceleração para cair na data real em que aquilo aconteceu.
+ */
+export function clockToRealTime(clockMs) {
+  const debugClock = typeof window !== 'undefined' ? window.__pomodoroTimeScale : null;
+  if (!debugClock) return clockMs;
+  const scale = typeof debugClock.getScale === 'function' ? (debugClock.getScale() || 1) : 1;
+  return Date.now() - (debugClock.now() - clockMs) / scale;
+}
+
 export class CountdownTimer {
   /**
    * @param {Object} options
@@ -83,6 +108,7 @@ export class CountdownTimer {
     this._intervalId = null;
     this._finishTimeoutId = null; // timeout único agendado exatamente para o instante de término (ver _scheduleFinishTimeout)
     this._finished = false;
+    this._scheduledEndTimestamp = null; // instante (relógio de _now()) em que o ciclo ERA para terminar; preenchido ao finalizar
   }
 
   // ---------- Ações públicas ----------
@@ -205,6 +231,17 @@ export class CountdownTimer {
     return this._state;
   }
 
+  /**
+   * Instante previsto de término do ciclo que acabou de finalizar (no relógio
+   * de _now()), ou null se o cronômetro não terminou rodando. Quem contabiliza
+   * o estudo usa isto como fim do período de execução: se o tick de término
+   * chegar atrasado (aba em segundo plano, máquina suspensa), o tempo entre o
+   * término previsto e o momento em que o app percebeu NÃO é estudo.
+   */
+  getScheduledEndTimestamp() {
+    return this._scheduledEndTimestamp;
+  }
+
   /** Progresso de 0 a 1 (0 = início, 1 = concluído). */
   getProgress() {
     const remaining = this.getRemainingMs();
@@ -229,6 +266,11 @@ export class CountdownTimer {
       endTimestamp: this._endTimestamp,
       allowDecrease: this._allowDecrease,
       savedAt: Date.now(),
+      // Mesmo instante, mas no relógio do cronômetro (_now()). É o "último
+      // momento em que o app estava vivo e rodando": ao restaurar um
+      // snapshot RUNNING, o tempo depois disto (app fechado, PC desligado)
+      // não conta como execução. Ver restore().
+      savedClockAt: _now(),
     };
   }
 
@@ -239,9 +281,9 @@ export class CountdownTimer {
    * enquanto o cronômetro roda) lançava erro, quebrando a restauração
    * inteira após um F5/reload e fazendo parecer que o ciclo foi perdido.
    */
-  static computeRemainingMsFromSnapshot(snapshot) {
+  static computeRemainingMsFromSnapshot(snapshot, atMs = _now()) {
     if (snapshot.endTimestamp == null) return snapshot.remainingAtPause;
-    return Math.max(0, snapshot.endTimestamp - _now());
+    return Math.max(0, snapshot.endTimestamp - atMs);
   }
 
   /**
@@ -250,8 +292,16 @@ export class CountdownTimer {
    * aba estava fechada, marca isFinished() = true — quem chamar deve
    * verificar isso e tratar a finalização manualmente (contabilizar
    * ciclo, disparar som, etc.), pois isso é regra de negócio externa.
+   *
+   * @param {Object} snapshot
+   * @param {Object} [callbacks]
+   * @param {Object} [options]
+   * @param {number} [options.asOfMs] - calcula o tempo restante como estava neste
+   *   instante (no relógio de _now()) em vez de "agora". Usado para NÃO contar
+   *   como execução o tempo em que o app ficou fechado: passa-se o último
+   *   batimento salvo (snapshot.savedClockAt). Padrão: agora (comportamento antigo).
    */
-  static restore(snapshot, callbacks = {}) {
+  static restore(snapshot, callbacks = {}, { asOfMs = _now() } = {}) {
     const timer = new CountdownTimer({
       durationMs: snapshot.totalDuration,
       allowDecrease: snapshot.allowDecrease,
@@ -260,13 +310,14 @@ export class CountdownTimer {
     });
 
     if (snapshot.state === TimerState.RUNNING) {
-      const remainingNow = CountdownTimer.computeRemainingMsFromSnapshot(snapshot);
+      const remainingNow = CountdownTimer.computeRemainingMsFromSnapshot(snapshot, asOfMs);
 
       if (remainingNow <= 0) {
         timer._totalDuration = snapshot.totalDuration;
         timer._remainingAtPause = 0;
         timer._state = TimerState.IDLE;
         timer._finished = true;
+        timer._scheduledEndTimestamp = snapshot.endTimestamp ?? null;
       } else {
         timer._remainingAtPause = remainingNow;
         timer._state = TimerState.PAUSED; // volta pausado; quem usa decide se retoma automaticamente
@@ -340,6 +391,7 @@ export class CountdownTimer {
 
   _forceFinish() {
     this._clearTicks();
+    this._scheduledEndTimestamp = this._endTimestamp;
     this._remainingAtPause = 0;
     this._endTimestamp = null;
     this._state = TimerState.FINISHED;
