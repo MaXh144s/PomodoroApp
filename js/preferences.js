@@ -17,6 +17,33 @@ export const MIN_ALARM_DURATION_SECONDS = 3;
 export const MAX_ALARM_DURATION_SECONDS = 60;
 export const DEFAULT_DAILY_GOAL_MINUTES = 0; // 0 = sem meta definida (nenhuma linha de meta aparece no gráfico)
 
+/**
+ * Modo de transição entre ciclos (estudo <-> descanso) ao fim do alarme:
+ * - AUTOMATIC: comportamento histórico — o alarme toca por até
+ *   `alarmDurationSeconds` e, ao parar sozinho, o app já avança para a
+ *   próxima fase (novo descanso ou novo estudo) sem precisar de clique.
+ * - MANUAL: o alarme também para sozinho depois de `alarmDurationSeconds`,
+ *   mas a fase de alerta permanece aberta — só avança quando o usuário
+ *   tocar em "Continuar". Existe para quem não quer que um novo ciclo de
+ *   estudo comece (e passe a contar tempo) sozinho caso a pessoa se
+ *   distraia e não esteja por perto para retomar.
+ */
+export const CycleTransitionMode = Object.freeze({
+  AUTOMATIC: 'automatic',
+  MANUAL: 'manual',
+});
+
+export const DEFAULT_CYCLE_TRANSITION_MODE = CycleTransitionMode.AUTOMATIC;
+
+/**
+ * Valida se um valor é um modo de transição de ciclo reconhecido.
+ * @param {string} mode
+ * @returns {boolean}
+ */
+export function isValidCycleTransitionMode(mode) {
+  return mode === CycleTransitionMode.AUTOMATIC || mode === CycleTransitionMode.MANUAL;
+}
+
 /** Presets de duração de estudo oferecidos na tela de Configurações. */
 export const STUDY_DURATION_PRESETS = Object.freeze([25, 50, 60]); // minutos: 25min, 50min, 1h
 
@@ -45,7 +72,7 @@ export function clampAlarmDurationSeconds(seconds) {
   return Math.min(MAX_ALARM_DURATION_SECONDS, Math.max(MIN_ALARM_DURATION_SECONDS, seconds));
 }
 
-/** @returns {{ratioStudyPart: number, ratioRestPart: number, defaultStudyMinutes: number, alarmDurationSeconds: number, dailyGoalMinutes: number}} */
+/** @returns {{ratioStudyPart: number, ratioRestPart: number, defaultStudyMinutes: number, alarmDurationSeconds: number, dailyGoalMinutes: number, cycleTransitionMode: string}} */
 export function getDefaultPreferences() {
   return {
     ratioStudyPart: DEFAULT_RATIO_STUDY_PART,
@@ -53,6 +80,7 @@ export function getDefaultPreferences() {
     defaultStudyMinutes: DEFAULT_STUDY_MINUTES,
     alarmDurationSeconds: DEFAULT_ALARM_DURATION_SECONDS,
     dailyGoalMinutes: DEFAULT_DAILY_GOAL_MINUTES,
+    cycleTransitionMode: DEFAULT_CYCLE_TRANSITION_MODE,
   };
 }
 

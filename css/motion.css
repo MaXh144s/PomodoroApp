@@ -131,6 +131,23 @@
   transition: stroke-dashoffset 900ms var(--ease-standard);
 }
 
+/* ---------- Troca de tema: onda a partir do botão ----------
+ * app.js calcula o centro do botão de tema e anima o clip-path de
+ * ::view-transition-new(root) crescendo a partir dali via
+ * Element.animate() (feito em JS porque o ponto de origem é dinâmico —
+ * clip-path com coordenadas fixas em keyframes CSS não daria).
+ * Aqui só desligamos o crossfade padrão que a View Transitions API
+ * aplicaria por conta própria (opacidade + mix-blend-mode: plus-lighter),
+ * que brigaria visualmente com o recorte circular. Isolado pela flag
+ * [data-theme-transition] para não afetar as transições normais de troca
+ * de tela (essas usam [data-view-transition], nunca as duas ao mesmo tempo).
+ */
+:root[data-theme-transition]::view-transition-old(root),
+:root[data-theme-transition]::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
 /* ---------- Acessibilidade: prefers-reduced-motion ----------
  * Precisa ser a última regra do arquivo para vencer tudo acima.
  * app.js também checa isso via matchMedia antes de chamar

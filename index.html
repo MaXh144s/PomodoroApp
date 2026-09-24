@@ -4,6 +4,26 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pomodoro</title>
+<!-- Aplica o tema (claro/escuro) ANTES do CSS renderizar, direto do
+     localStorage — sem isso, a página sempre piscaria no tema claro por
+     uma fração de segundo antes do app.js carregar e corrigir. Mantém a
+     mesma chave usada por storage.js (pomodoro:theme) e o mesmo formato
+     (JSON.stringify de uma string), então os dois lados sempre concordam. -->
+<script>
+(function () {
+  try {
+    var raw = window.localStorage.getItem('pomodoro:theme');
+    var theme = raw ? JSON.parse(raw) : null;
+    if (theme !== 'dark' && theme !== 'light') {
+      theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+    }
+    document.documentElement.dataset.theme = theme;
+  } catch (err) {
+    document.documentElement.dataset.theme = 'light';
+  }
+})();
+</script>
+<script type="module" src="./js/bg-web.js"></script>
 <link rel="manifest" href="./manifest.json">
 <meta name="theme-color" content="#e2572b">
 <link rel="icon" href="img/favicon.png" type="image/x-icon">
@@ -14,12 +34,29 @@
 <link rel="stylesheet" href="./css/style.css">
 <link rel="stylesheet" href="./css/motion.css">
 <link rel="stylesheet" href="./css/depth.css">
+<link rel="stylesheet" href="./css/dark-mode.css">
 </head>
 <body>
 
 <main class="app">
 
   <span id="save-indicator" class="save-indicator" hidden></span>
+
+  <!-- Alternância de tema claro/escuro — fica visível em qualquer tela.
+       Estado inicial (aria-pressed, ícone) já vem certo do script inline
+       no <head>; app.js só sincroniza o rótulo e liga o clique. -->
+  <button id="btn-theme-toggle" class="theme-toggle" type="button" aria-pressed="false" aria-label="Alternar tema claro/escuro" title="Alternar tema claro/escuro">
+    <span class="theme-toggle-thumb">
+      <svg class="theme-toggle-icon theme-toggle-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="4"></circle>
+        <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"></path>
+      </svg>
+      <svg class="theme-toggle-icon theme-toggle-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20.5 14.5a8.5 8.5 0 1 1-9-9 6.7 6.7 0 0 0 9 9Z"></path>
+        <path d="M17 3.5l0.6 1.4 1.4 0.6-1.4 0.6-0.6 1.4-0.6-1.4L15 5.5l1.4-0.6z"></path>
+      </svg>
+    </span>
+  </button>
 
   <div id="modal-resume" class="modal-overlay" hidden>
     <div class="card alert-box modal-card">
@@ -64,7 +101,7 @@
     <header class="home-header">
       <h1>Pomodoro</h1>
       <div class="home-header-actions">
-        <button id="btn-chart" class="btn-icon" title="Gráfico da semana" aria-label="Gráfico da semana"><img src="./img/icon-chart.png" alt="" class="header-icon-img"></button>
+        <button id="btn-chart" class="btn-icon" title="Gráfico da semana" aria-label="Gráfico da semana"><img src="./img/statistics-icon.png" alt="" class="header-icon-img"></button>
         <button id="btn-preferences" class="btn-icon" title="Preferências" aria-label="Preferências"><img src="./img/icon-settings.png" alt="" class="header-icon-img"></button>
         <button id="btn-new" class="fab" title="Novo temporizador" aria-label="Novo temporizador">+</button>
       </div>
@@ -94,17 +131,14 @@
         <span class="history-manage-chevron" aria-hidden="true">▾</span>
       </summary>
       <div class="history-manage-actions">
-        <button id="btn-history-export" class="btn btn-chip">
+        <button id="btn-history-export" class="btn btn-chip" title="Exportar histórico (JSON)" aria-label="Exportar histórico (JSON)">
           <img src="./img/icon-download.png" alt="" class="btn-icon-img">
-          Exportar JSON
         </button>
-        <button id="btn-history-import" class="btn btn-chip">
+        <button id="btn-history-import" class="btn btn-chip" title="Importar histórico (JSON)" aria-label="Importar histórico (JSON)">
           <img src="./img/icon-upload.png" alt="" class="btn-icon-img">
-          Importar JSON
         </button>
-        <button id="btn-history-trash" class="btn btn-chip">
+        <button id="btn-history-trash" class="btn btn-chip" title="Apagar histórico" aria-label="Apagar histórico">
           <img src="./img/icon-trash.png" alt="" class="btn-icon-img">
-          Lixeira
         </button>
       </div>
       <input type="file" id="input-history-import-file" accept="application/json,.json" hidden>
@@ -203,6 +237,16 @@
       <p class="field-hint">Por quanto tempo o alarme toca ao final de um ciclo, antes de parar sozinho.</p>
 
       <label class="field">
+        <span>Transição entre ciclos</span>
+        <div class="segmented-control" id="pref-transition-mode">
+          <button type="button" class="segmented-option" data-transition-mode="automatic" aria-pressed="true">Automático</button>
+          <button type="button" class="segmented-option" data-transition-mode="manual" aria-pressed="false">Clicar para continuar</button>
+        </div>
+      </label>
+
+      <p class="field-hint">No modo automático, o app avança sozinho para o próximo ciclo quando o alarme parar. Em "Clicar para continuar", o alarme para sozinho, mas o próximo ciclo só começa quando você tocar em "Continuar agora" — assim o cronômetro não fica rodando sozinho se você esquecer.</p>
+
+      <label class="field">
         <span>Som do alerta</span>
         <input type="file" id="pref-sound-file" accept="audio/*">
         <p id="pref-sound-current" class="field-hint">Usando o beep padrão do app.</p>
@@ -293,6 +337,7 @@
     <div class="alert-box">
       <p id="alert-icon" class="alert-icon">⏰</p>
       <h2 id="alert-message">Estudo concluído! Hora de descansar.</h2>
+      <p id="alert-hint" class="field-hint" hidden>O alarme já parou. Toque em "Continuar agora" quando estiver pronto.</p>
       <div class="alert-actions">
         <button id="btn-stop-sound" class="btn btn-secondary">Parar som</button>
         <button id="btn-skip-alert" class="btn btn-primary">Continuar agora</button>

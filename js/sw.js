@@ -10,7 +10,7 @@
  * servindo a versão antiga do cache.
  */
 
-const CACHE_VERSION = 'pomodoro-v6';
+const CACHE_VERSION = 'pomodoro-v12';
 
 const CORE_ASSETS = [
   './',
@@ -19,6 +19,7 @@ const CORE_ASSETS = [
   './css/style.css',
   './css/motion.css',
   './css/depth.css',
+  './css/dark-mode.css',
   './js/app.js',
   './js/appstate.js',
   './js/cycles.js',
@@ -27,6 +28,7 @@ const CORE_ASSETS = [
   './js/storage.js',
   './js/timer.js',
   './js/sound.js',
+  './js/bg-web.js',
   './img/favicon.png',
   './img/icon-192.png',
   './img/icon-512.png',

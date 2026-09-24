@@ -18,6 +18,7 @@ export const STORAGE_KEYS = Object.freeze({
   APP_STATE: 'pomodoro:appState',      // estado da máquina de estados (fase atual, etc.)
   PREFERENCES: 'pomodoro:preferences', // preferências do usuário (proporção padrão e duração inicial sugerida)
   CUSTOM_SOUND: 'pomodoro:customSound', // toque customizado (dataURL de áudio) escolhido pelo usuário para o alerta
+  THEME: 'pomodoro:theme',             // tema escolhido manualmente ('light' | 'dark'); ausente = segue o sistema
 });
 
 /**
@@ -213,6 +214,16 @@ export async function saveCustomSound(sound) {
 /** Remove o toque customizado, voltando ao beep padrão gerado pelo app. */
 export async function clearCustomSound() {
   return storage.remove(STORAGE_KEYS.CUSTOM_SOUND);
+}
+
+/** @returns {Promise<'light'|'dark'|null>} tema escolhido manualmente pelo usuário (ou null se nunca escolheu — quem chama deve cair para a preferência do sistema) */
+export async function loadTheme() {
+  return storage.get(STORAGE_KEYS.THEME);
+}
+
+/** @param {'light'|'dark'} theme */
+export async function saveTheme(theme) {
+  return storage.set(STORAGE_KEYS.THEME, theme);
 }
 
 /** Apaga todos os dados do app (configurações, sessões, snapshots, estado). */

@@ -14,10 +14,28 @@
   --color-rest-dark: #1f6fc4;
 }
 
-/* Fundo com leve gradiente radial em vez de cor chapada — dá uma
-   sensação sutil de profundidade atrás dos cards, sem chamar atenção. */
+/* Fundo do tema claro, em camadas (de cima para baixo). Tudo bem sutil: os
+   cards são opacos, então o detalhe aparece só nos respiros entre eles.
+   1. grão fino (ruído SVG) — tira o aspecto "chapado" de tela digital
+   2. malha de pontos — textura de caderno pontilhado, quase invisível
+   3. vinheta — escurece de leve as bordas e concentra o olhar no centro
+   4. brilho quente (laranja da marca) no canto superior esquerdo
+   5. brilho frio (azul do descanso) no canto inferior direito
+   6. luz suave no topo (a mesma de antes)
+   7. cor base
+   "fixed" mantém o desenho parado enquanto a página rola (no iOS Safari o
+   navegador ignora isso e ele rola junto — sem prejuízo visual).
+   O tema escuro redefine `background` inteiro em dark-mode.css, então nada
+   daqui vaza para lá. */
 body {
-  background: radial-gradient(circle at 50% -10%, #fffefb 0%, var(--color-bg) 55%);
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.17 0 0 0 0 0.17 0 0 0 0 0.17 0 0 0 0.1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E") 0 0 / 180px 180px repeat fixed,
+    radial-gradient(circle, rgba(43, 43, 43, 0.055) 1px, transparent 1.6px) 0 0 / 22px 22px repeat fixed,
+    radial-gradient(ellipse at 50% 40%, transparent 55%, rgba(43, 43, 43, 0.035) 100%) fixed,
+    radial-gradient(ellipse 70% 45% at 0% 0%, rgba(226, 87, 43, 0.085) 0%, transparent 70%) fixed,
+    radial-gradient(ellipse 65% 45% at 100% 100%, rgba(43, 143, 226, 0.07) 0%, transparent 70%) fixed,
+    radial-gradient(circle at 50% -10%, #fffefb 0%, transparent 55%) fixed,
+    var(--color-bg);
 }
 
 /* ---------- Cards ---------- */

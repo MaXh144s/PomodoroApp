@@ -8,6 +8,12 @@
   --color-text-muted: #767676;
   --color-border: #e9e5e0;
   --radius: 16px;
+
+  /* Tinta fixa: usada em elementos "flutuantes" (indicador de salvamento,
+     tooltip do gráfico) que precisam continuar escuros com texto branco
+     nos dois temas — ao contrário de --color-text, que se inverte no
+     modo escuro (ver dark-mode.css). */
+  --color-ink: #2b2b2b;
 }
 
 * {
@@ -232,17 +238,78 @@ body {
   transform: rotate(180deg);
 }
 
+/* O título tem entrelinha (line-height normal), que empurra o texto ~5px
+ * para baixo do topo do card e deixa o respiro de cima maior que o dos
+ * lados e de baixo (20px). Fallback: com o card aberto, compensa no
+ * padding-top (valor aproximado, depende da fonte). */
+.history-manage-card[open] {
+  padding-top: 15px;
+}
+
+/* Onde há suporte, corta a entrelinha do título rente à altura das letras
+ * (independe da fonte): o padding de 20px vira o espaço visual real até a
+ * borda, igual aos lados e a embaixo — aberto ou fechado. */
+@supports (text-box: trim-both cap alphabetic) {
+  .history-manage-card[open] {
+    padding-top: 20px;
+  }
+
+  .history-manage-summary .card-title {
+    text-box: trim-both cap alphabetic;
+  }
+
+  .history-manage-chevron {
+    line-height: 1;
+  }
+}
+
 .history-manage-actions {
   display: flex;
-  gap: 8px;
+  justify-content: space-between;
   margin-top: 14px;
 }
 
+/* Ícone-apenas, circular — escopado a este contexto: .btn-chip em outros
+ * lugares do app (presets, ajuste de tempo etc.) continua com texto e o
+ * visual de pílula de sempre, sem herdar nada disto. */
 .history-manage-actions .btn-chip {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  transition: background-color var(--duration-fast, 120ms) var(--ease-standard, ease),
+    transform var(--duration-fast, 120ms) var(--ease-standard, ease),
+    box-shadow var(--duration-fast, 120ms) var(--ease-standard, ease);
+}
+
+.history-manage-actions .btn-chip:hover {
+  background: var(--color-border);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-sm);
+}
+
+.history-manage-actions .btn-chip:active {
+  transform: scale(0.92) translateY(0);
+}
+
+.history-manage-actions .btn-icon-img {
+  width: 18px;
+  height: 18px;
+  transition: transform var(--duration-fast, 120ms) var(--ease-standard, ease);
+}
+
+.history-manage-actions .btn-chip:hover .btn-icon-img {
+  transform: scale(1.1);
+}
+
+/* Lixeira é destrutiva — o hover ganha um aviso sutil em vermelho em vez
+ * do cinza neutro dos outros dois, sem precisar recolorir o ícone. */
+#btn-history-trash:hover {
+  background: rgba(214, 62, 62, 0.14);
 }
 
 .btn-icon-img {
@@ -256,6 +323,15 @@ body {
   height: 22px;
   display: block;
 }
+
+/* Ícones ilustrados de claro/escuro: troca por cima do <img src="..."> via
+ * content: url(); o src original (ainda presente no HTML) fica como
+ * fallback automático em navegadores sem suporte a content em <img>.
+ * A versão escura é sobrescrita em dark-mode.css. */
+#btn-preferences img { content: url('../img/settings-icon-light-theme.png'); }
+#btn-history-export img { content: url('../img/download-icon-light-theme.png'); }
+#btn-history-import img { content: url('../img/upload-icon-light-theme.png'); }
+#btn-history-trash img { content: url('../img/trash-icon-light-theme.png'); }
 
 .fab-icon {
   width: 100%;
@@ -377,6 +453,28 @@ body {
   font-size: 0.8rem;
   color: var(--color-text-muted);
   margin: -6px 0 0;
+}
+
+.segmented-control {
+  display: flex;
+  gap: 8px;
+}
+
+.segmented-option {
+  flex: 1;
+  padding: 10px 0;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: #f1efec;
+  color: var(--color-text);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.segmented-option[aria-pressed="true"] {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
 }
 
 .ratio-inputs {
@@ -772,7 +870,7 @@ body {
   top: 0;
   left: 0;
   transform: translate(-50%, calc(-100% - 10px));
-  background: var(--color-text);
+  background: var(--color-ink);
   color: #fff;
   padding: 8px 12px;
   border-radius: 10px;
@@ -803,7 +901,7 @@ body {
   top: 100%;
   transform: translateX(-50%);
   border: 5px solid transparent;
-  border-top-color: var(--color-text);
+  border-top-color: var(--color-ink);
 }
 
 .chart-empty {
@@ -827,9 +925,9 @@ body {
 
 .save-indicator {
   position: fixed;
-  top: 14px;
+  top: 66px; /* abaixo do botão de modo (.mode-toggle), fixo no mesmo canto */
   right: 14px;
-  background: var(--color-text);
+  background: var(--color-ink);
   color: #fff;
   font-size: 0.78rem;
   font-weight: 600;

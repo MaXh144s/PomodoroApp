@@ -1,0 +1,229 @@
+/**
+ * dark-mode.css
+ * Tema escuro + botão de alternância (canto superior direito).
+ *
+ * O tema é ativado via [data-theme="dark"] em <html> — setado por um
+ * script inline no <head> de index.html (lê localStorage antes do CSS
+ * renderizar, evitando flash) e mantido depois por app.js/storage.js a
+ * cada clique no botão.
+ *
+ * Carregar por último (depois de style.css, motion.css e depth.css): só
+ * redefine variáveis de cor e os poucos lugares que usavam cor fixa em
+ * vez de variável — não redefine layout nem comportamento.
+ */
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-bg: #16161d;
+  --color-card: #1f1f29;
+  --color-primary: #ff7a50;
+  --color-primary-dark: #ff9270;
+  --color-rest: #5babef;
+  --color-text: #f1efe9;
+  --color-text-muted: #9a97a6;
+  --color-border: #34333f;
+
+  /* Superfícies "cinza claro" do tema original (#f1efec / #f8f6f3), que
+     não eram variáveis — precisam de uma versão escura própria. */
+  --color-surface-muted: #262631;
+  --color-warning-bg: rgba(255, 122, 80, 0.16);
+
+  --color-toggle-track: #2a2a38;
+}
+
+/* Fundo com gradiente sutil (mesma ideia de depth.css, versão escura). */
+:root[data-theme="dark"] body {
+  background: radial-gradient(circle at 50% -10%, #1d1d27 0%, var(--color-bg) 55%);
+}
+
+:root[data-theme="dark"] .btn-secondary,
+:root[data-theme="dark"] .btn-chip,
+:root[data-theme="dark"] .trim-track {
+  background: var(--color-surface-muted);
+}
+
+/* Opções do controle segmentado (ex: "Clicar para continuar"): o fundo era
+   fixo em #f1efec, e no escuro o texto vira claro (--color-text) — texto
+   claro sobre fundo claro. O :not() preserva o estado selecionado
+   (laranja com texto branco), definido em style.css. */
+:root[data-theme="dark"] .segmented-option:not([aria-pressed="true"]) {
+  background: var(--color-surface-muted);
+}
+
+:root[data-theme="dark"] .field-warning {
+  background: var(--color-warning-bg);
+  border-color: rgba(255, 122, 80, 0.3);
+}
+
+:root[data-theme="dark"] .modal-delete-details {
+  background: var(--color-surface-muted);
+}
+
+/* Versão escura dos ícones ilustrados (ver os defaults claros em style.css). */
+:root[data-theme="dark"] #btn-preferences img { content: url('../img/settings-icon-dark-theme.png'); }
+:root[data-theme="dark"] #btn-history-export img { content: url('../img/download-icon-dark-theme.png'); }
+:root[data-theme="dark"] #btn-history-import img { content: url('../img/upload-icon-dark-theme.png'); }
+:root[data-theme="dark"] #btn-history-trash img { content: url('../img/trash-icon-dark-theme.png'); }
+
+/* "multiply" escurece tudo até sumir num fundo já escuro; "screen" clareia
+   a faixa selecionada, mantendo a mesma ideia de "tingir" a forma de onda. */
+:root[data-theme="dark"] .trim-window {
+  mix-blend-mode: screen;
+}
+
+/* ---------- Botão de alternância de tema ----------
+ * O fundo do trilho e os ícones do thumb são imagens (céu noturno
+ * estrelado / céu diurno com nuvens, e um sol/lua ilustrados) em vez de
+ * cor chapada + SVG. Os arquivos ficam em img/ (../img/ a partir de
+ * css/dark-mode.css): light-mode-background.png, dark-mode-background.png,
+ * sun-icon.png, moon-icon.png.
+ */
+
+.theme-toggle {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  z-index: 21; /* acima do indicador de salvamento (20), abaixo dos modais (25) */
+  width: 56px;
+  height: 32px;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  overflow: hidden; /* recorta as imagens de fundo no formato de pílula */
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full, 999px);
+  background-color: var(--color-surface-muted, var(--color-border));
+  box-shadow: inset 0 1px 2px rgba(43, 43, 43, 0.08);
+  cursor: pointer;
+  transition: border-color var(--duration-base, 220ms) var(--ease-standard, ease);
+}
+
+.theme-toggle:hover {
+  border-color: var(--color-primary);
+}
+
+.theme-toggle:active .theme-toggle-thumb {
+  width: 26px;
+}
+
+/* Fundo do trilho: céu diurno e céu noturno, um sobre o outro, alternando
+ * por opacidade (crossfade) — como background-image não faz transição
+ * suave sozinho, cada céu vive num pseudo-elemento próprio. */
+.theme-toggle::before,
+.theme-toggle::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  transition: opacity var(--duration-base, 220ms) var(--ease-standard, ease);
+}
+
+.theme-toggle::before {
+  background-image: url('../img/light-mode-background.png');
+  opacity: 1;
+}
+
+.theme-toggle::after {
+  background-image: url('../img/dark-mode-background.png');
+  opacity: 0;
+}
+
+:root[data-theme="dark"] .theme-toggle::before {
+  opacity: 0;
+}
+
+:root[data-theme="dark"] .theme-toggle::after {
+  opacity: 1;
+}
+
+.theme-toggle-thumb {
+  position: relative;
+  z-index: 1; /* fica por cima dos céus do trilho */
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  overflow: hidden; /* recorta as imagens do sol/lua no círculo do thumb */
+  transform: translateX(0);
+  transition: transform var(--duration-base, 220ms) var(--ease-emphasized, ease),
+    width var(--duration-fast, 120ms) var(--ease-standard, ease);
+  box-shadow: 0 1px 3px rgba(43, 43, 43, 0.35), 0 0 0 1px rgba(43, 43, 43, 0.06);
+}
+
+/* Ícones antigos (SVG de sol/lua) desativados — substituídos pelas
+ * imagens em .theme-toggle-thumb::before/::after abaixo. */
+.theme-toggle-icon {
+  display: none;
+}
+
+.theme-toggle-thumb::before,
+.theme-toggle-thumb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  transition: opacity var(--duration-base, 220ms) var(--ease-standard, ease),
+    transform var(--duration-base, 220ms) var(--ease-emphasized, ease);
+}
+
+.theme-toggle-thumb::before {
+  background-image: url('../img/sun-icon.png');
+  opacity: 1;
+  transform: scale(1) rotate(0deg);
+}
+
+.theme-toggle-thumb::after {
+  background-image: url('../img/moon-icon.png');
+  opacity: 0;
+  transform: scale(0.4) rotate(-90deg);
+}
+
+:root[data-theme="dark"] .theme-toggle-thumb::before {
+  opacity: 0;
+  transform: scale(0.4) rotate(90deg);
+}
+
+:root[data-theme="dark"] .theme-toggle-thumb::after {
+  opacity: 1;
+  transform: scale(1) rotate(0deg);
+}
+
+:root[data-theme="dark"] .theme-toggle {
+  border-color: var(--color-toggle-track);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme="dark"] .theme-toggle-thumb {
+  transform: translateX(24px);
+}
+
+/* Reserva espaço no topo para o botão de tema (fixo: 32px de altura, a 14px
+ * do topo). Sem isso ele ficava por cima do cabeçalho e dos botões de cada
+ * tela em telas estreitas. */
+.app {
+  padding-top: 60px;
+}
+
+@media (max-width: 380px) {
+  .theme-toggle {
+    top: 10px;
+    right: 10px;
+  }
+
+  .app {
+    padding-top: 54px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle,
+  .theme-toggle-thumb,
+  .theme-toggle-thumb::before,
+  .theme-toggle-thumb::after,
+  .theme-toggle::before,
+  .theme-toggle::after {
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -27,8 +27,10 @@ import {
   clampAlarmDurationSeconds,
   isValidAlarmDurationSeconds,
   isValidDailyGoalMinutes,
+  CycleTransitionMode,
+  isValidCycleTransitionMode,
 } from './preferences.js';
-import { loadPreferences, savePreferences, loadCustomSound, saveCustomSound, clearCustomSound } from './storage.js';
+import { loadPreferences, savePreferences, loadCustomSound, saveCustomSound, clearCustomSound, saveTheme } from './storage.js';
 import { setAlertCustomSound, setAlertMaxDuration, playPreview, stopPreview, seekPreview, getAudioDuration, getAudioWaveform } from './sound.js';
 
 const RING_CIRCUMFERENCE = 2 * Math.PI * 90; // deve bater com o raio do SVG em style.css
@@ -67,6 +69,7 @@ const views = {
 
 const el = {
   saveIndicator: document.getElementById('save-indicator'),
+  btnThemeToggle: document.getElementById('btn-theme-toggle'),
 
   modalResume: document.getElementById('modal-resume'),
   modalResumeDetail: document.getElementById('modal-resume-detail'),
@@ -127,6 +130,8 @@ const el = {
   prefAlarmDuration: document.getElementById('pref-alarm-duration'),
   prefAlarmPresetButtons: Array.from(document.querySelectorAll('#preferences-form [data-preset-alarm-seconds]')),
 
+  prefTransitionModeButtons: Array.from(document.querySelectorAll('#pref-transition-mode [data-transition-mode]')),
+
   prefSoundFile: document.getElementById('pref-sound-file'),
   prefSoundCurrent: document.getElementById('pref-sound-current'),
   prefSoundWarning: document.getElementById('pref-sound-warning'),
@@ -157,11 +162,88 @@ const el = {
 
   alertIcon: document.getElementById('alert-icon'),
   alertMessage: document.getElementById('alert-message'),
+  alertHint: document.getElementById('alert-hint'),
   btnStopSound: document.getElementById('btn-stop-sound'),
   btnSkipAlert: document.getElementById('btn-skip-alert'),
 };
 
 el.progressRingFg.style.strokeDasharray = String(RING_CIRCUMFERENCE);
+
+// ---------- Botão de modo claro/escuro ----------
+// O botão (#btn-theme-toggle) e as cores do modo escuro já vêm prontos de
+// css/dark-mode.css, dirigidos pelo atributo [data-theme] de <html> — o
+// mesmo que o script inline no <head> já define antes do CSS renderizar
+// (lendo localStorage, para não piscar). Aqui só refletimos o estado no
+// atributo aria-pressed do botão (que o CSS usa para animar o toggle) e
+// persistimos a escolha manual via storage.js, na mesma chave.
+
+function _applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  el.btnThemeToggle.setAttribute('aria-pressed', String(theme === 'dark'));
+}
+
+el.btnThemeToggle.addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+
+  // Sem suporte a View Transitions (ou com prefers-reduced-motion): troca
+  // instantânea, igual a antes — mesmo fallback usado em showView().
+  if (!document.startViewTransition || _prefersReducedMotion()) {
+    _applyTheme(next);
+    saveTheme(next);
+    return;
+  }
+
+  // Origem da onda: o centro do próprio botão (não o ponto do clique/toque),
+  // para funcionar igual via mouse, toque ou teclado (Enter/Espaço). O raio
+  // final cobre o canto mais distante da tela, garantindo que a onda tome
+  // conta de toda a viewport antes de terminar.
+  const rect = el.btnThemeToggle.getBoundingClientRect();
+  const originX = rect.left + rect.width / 2;
+  const originY = rect.top + rect.height / 2;
+  const endRadius = Math.hypot(
+    Math.max(originX, window.innerWidth - originX),
+    Math.max(originY, window.innerHeight - originY)
+  );
+
+  // Flag lida por motion.css: desliga só o crossfade padrão desta transição
+  // específica (a de troca de tela usa data-view-transition, não esta).
+  document.documentElement.dataset.themeTransition = 'true';
+
+  const transition = document.startViewTransition(() => {
+    _applyTheme(next);
+    saveTheme(next);
+  });
+
+  transition.ready
+    .then(() => {
+      // A nova aparência entra recortada por um círculo que cresce a partir
+      // do botão — como ela fica por cima da aparência antiga (ordem padrão
+      // da View Transitions API), o crescimento do círculo vai "pintando"
+      // o novo tema por cima do antigo, feito o efeito de onda pedido.
+      document.documentElement.animate(
+        {
+          clipPath: [
+            `circle(0px at ${originX}px ${originY}px)`,
+            `circle(${endRadius}px at ${originX}px ${originY}px)`,
+          ],
+        },
+        {
+          duration: 650,
+          easing: 'cubic-bezier(0.22, 1, 0.36, 1)', // mesma curva de --ease-standard
+          pseudoElement: '::view-transition-new(root)',
+        }
+      );
+    })
+    .catch(() => {}); // ready pode rejeitar se outra transição começar antes (ex: cliques rápidos)
+
+  transition.finished
+    .catch(() => {})
+    .finally(() => {
+      delete document.documentElement.dataset.themeTransition;
+    });
+});
+
+_applyTheme(document.documentElement.dataset.theme || 'light');
 
 // ---------- Instância central do app ----------
 
@@ -192,7 +274,11 @@ let savedCustomSound = null;
 
 async function loadCurrentPreferences() {
   const saved = await loadPreferences();
-  currentPreferences = saved || getDefaultPreferences();
+  // Mescla com o padrão em vez de usar `saved` puro: preferências salvas antes
+  // de um novo campo existir (ex: cycleTransitionMode) não o têm, e sem isso
+  // currentPreferences.cycleTransitionMode ficaria undefined para quem já
+  // tinha preferências configuradas.
+  currentPreferences = saved ? { ...getDefaultPreferences(), ...saved } : getDefaultPreferences();
 
   savedCustomSound = await loadCustomSound();
   setAlertCustomSound(
@@ -200,6 +286,7 @@ async function loadCurrentPreferences() {
     savedCustomSound ? (savedCustomSound.trimStartSeconds || 0) : 0
   );
   setAlertMaxDuration(currentPreferences.alarmDurationSeconds * 1000);
+  app.setCycleTransitionMode(currentPreferences.cycleTransitionMode);
 }
 
 function renderPreferencesForm() {
@@ -208,6 +295,7 @@ function renderPreferencesForm() {
   el.prefRatioStudy.value = currentPreferences.ratioStudyPart;
   el.prefRatioRest.value = currentPreferences.ratioRestPart;
   el.prefAlarmDuration.value = currentPreferences.alarmDurationSeconds;
+  _setTransitionModeButtonsState(currentPreferences.cycleTransitionMode);
   updatePreferencesWarning();
 
   pendingCustomSound = undefined; // usuário ainda não mexeu no som nesta visita ao formulário
@@ -452,6 +540,27 @@ el.prefAlarmPresetButtons.forEach((btn) => {
   });
 });
 
+// Reflete visualmente qual modo de transição está selecionado no momento
+// (via aria-pressed, estilizado em style.css). Não salva nada por si só —
+// isso só acontece no submit do formulário, como as outras preferências.
+function _setTransitionModeButtonsState(mode) {
+  el.prefTransitionModeButtons.forEach((btn) => {
+    btn.setAttribute('aria-pressed', String(btn.dataset.transitionMode === mode));
+  });
+}
+
+/** @returns {string} o modo de transição atualmente selecionado no formulário */
+function _selectedTransitionMode() {
+  const active = el.prefTransitionModeButtons.find((btn) => btn.getAttribute('aria-pressed') === 'true');
+  return active ? active.dataset.transitionMode : CycleTransitionMode.AUTOMATIC;
+}
+
+el.prefTransitionModeButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    _setTransitionModeButtonsState(btn.dataset.transitionMode);
+  });
+});
+
 el.trimRange.addEventListener('input', () => {
   pendingTrimStartSeconds = Number(el.trimRange.value) || 0;
   _renderTrimVisual(pendingTrimStartSeconds, _formAlarmDurationSeconds(), pendingAudioDurationSeconds || 0);
@@ -491,6 +600,7 @@ el.preferencesForm.addEventListener('submit', async (event) => {
   const ratioStudyPart = Number(el.prefRatioStudy.value);
   const ratioRestPart = Number(el.prefRatioRest.value);
   const alarmDurationSeconds = clampAlarmDurationSeconds(Number(el.prefAlarmDuration.value));
+  const cycleTransitionMode = _selectedTransitionMode();
 
   if (
     !(defaultStudyMinutes > 0)
@@ -498,11 +608,13 @@ el.preferencesForm.addEventListener('submit', async (event) => {
     || !(ratioStudyPart > 0)
     || !(ratioRestPart > 0)
     || !isValidAlarmDurationSeconds(alarmDurationSeconds)
+    || !isValidCycleTransitionMode(cycleTransitionMode)
   ) return;
 
-  currentPreferences = { defaultStudyMinutes, dailyGoalMinutes, ratioStudyPart, ratioRestPart, alarmDurationSeconds };
+  currentPreferences = { defaultStudyMinutes, dailyGoalMinutes, ratioStudyPart, ratioRestPart, alarmDurationSeconds, cycleTransitionMode };
   await savePreferences(currentPreferences);
   setAlertMaxDuration(alarmDurationSeconds * 1000);
+  app.setCycleTransitionMode(cycleTransitionMode);
 
   // O trecho escolhido no seletor só vale quando ele está visível (áudio
   // ativo mais longo que o alarme); fora isso o som toca desde o início.
@@ -577,6 +689,15 @@ function showView(name, direction = 'forward') {
 
   document.documentElement.dataset.viewTransition = direction;
   const transition = document.startViewTransition(update);
+
+  // .ready e .updateCallbackDone também podem rejeitar nos mesmos casos que
+  // .finished (transição interrompida por outra mais rápida, ou aba escondida
+  // no meio da animação) — como ninguém aguarda o resultado delas, sem um
+  // catch próprio essas rejeições ficavam "soltas" e apareciam no console como
+  // "Uncaught (in promise)" mesmo sendo um caso esperado, não um erro real.
+  transition.ready.catch(() => {});
+  transition.updateCallbackDone.catch(() => {});
+
   return transition.finished
     .catch(() => {}) // transições podem ser abortadas (ex: navegação rápida); seguir mesmo assim
     .finally(() => {
@@ -1273,6 +1394,10 @@ function renderAlert(phase) {
   el.alertMessage.textContent = isStudyDone
     ? 'Estudo concluído! Hora de descansar.'
     : 'Descanso concluído! Hora de estudar.';
+
+  // No modo "clicar para continuar" o alarme para sozinho, mas a fase não
+  // avança sozinha — esse aviso evita que pareça que o app travou.
+  el.alertHint.hidden = currentPreferences.cycleTransitionMode !== CycleTransitionMode.MANUAL;
 }
 
 el.btnStopSound.addEventListener('click', () => {

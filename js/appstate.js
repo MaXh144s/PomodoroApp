@@ -44,6 +44,7 @@ import {
   saveAppState,
 } from './storage.js';
 import { studyFinishedAlert, restFinishedAlert, stopAllAlerts, unlockAudio } from './sound.js';
+import { CycleTransitionMode, DEFAULT_CYCLE_TRANSITION_MODE, isValidCycleTransitionMode } from './preferences.js';
 
 export const Phase = Object.freeze({
   CONFIG: 'CONFIG',             // nenhum cronômetro ativo, aguardando início
@@ -87,6 +88,7 @@ export class PomodoroApp {
     this._onSessionSaved = onSessionSaved;
 
     this._settings = { studyMs: DEFAULT_STUDY_MS, restMs: DEFAULT_REST_MS };
+    this._cycleTransitionMode = DEFAULT_CYCLE_TRANSITION_MODE;
     this._phase = Phase.CONFIG;
     this._timer = null;
     this._cycleId = null;   // identifica o ciclo atual; todos os períodos dele no histórico compartilham este id
@@ -158,6 +160,17 @@ export class PomodoroApp {
   /** Atalho: configura o estudo e aplica automaticamente o descanso padrão (proporção 5:1). */
   async configureWithDefaultRest(studyMs) {
     return this.configure(studyMs, computeDefaultRestMs(studyMs));
+  }
+
+  /**
+   * Define o modo de transição entre ciclos ao fim do alarme (ver
+   * CycleTransitionMode em preferences.js). Pode ser trocado a qualquer
+   * momento, inclusive com um alerta já tocando — só afeta o que acontece
+   * quando o alarme atual (ou o próximo) parar sozinho.
+   * @param {string} mode
+   */
+  setCycleTransitionMode(mode) {
+    this._cycleTransitionMode = isValidCycleTransitionMode(mode) ? mode : DEFAULT_CYCLE_TRANSITION_MODE;
   }
 
   // ---------- Estudo ----------
@@ -252,7 +265,7 @@ export class PomodoroApp {
     this._setPhase(Phase.STUDY_ALERT);
     await saveTimerSnapshot(null); // sem cronômetro ativo durante o alerta
 
-    studyFinishedAlert.play(() => this._continueToRest());
+    studyFinishedAlert.play(() => this._handleAlertAutoStop(() => this._continueToRest()));
   }
 
   // ---------- Descanso ----------
@@ -292,10 +305,29 @@ export class PomodoroApp {
     this._setPhase(Phase.REST_ALERT);
     await saveTimerSnapshot(null);
 
-    restFinishedAlert.play(() => this._continueToStudy());
+    restFinishedAlert.play(() => this._handleAlertAutoStop(() => this._continueToStudy()));
   }
 
   // ---------- Alertas (seções 4 e 6: interromper ou pular o som) ----------
+
+  /**
+   * Chamado quando o alarme (estudo ou descanso) para sozinho ao fim do
+   * tempo configurado (AlertPlayer.play/onAutoStop).
+   *
+   * No modo AUTOMATIC (padrão histórico), avança normalmente para a
+   * próxima fase, chamando `continueFn`.
+   *
+   * No modo MANUAL, o alarme já parou de tocar, mas a fase de alerta
+   * permanece aberta — `continueFn` não é chamado. Só avança quando o
+   * usuário tocar em "Continuar" (skipAlert()). Isso evita que um novo
+   * ciclo de estudo (que conta tempo) comece sozinho enquanto a pessoa não
+   * está por perto para retomar.
+   * @param {() => void} continueFn
+   */
+  _handleAlertAutoStop(continueFn) {
+    if (this._cycleTransitionMode === CycleTransitionMode.MANUAL) return;
+    continueFn();
+  }
 
   /**
    * Interrompe o alarme que estiver tocando (estudo ou descanso finalizado)

@@ -26,7 +26,7 @@
  * }}
  */
 export function computeCycleProgress(studiedMs, configuredMs) {
-  _assertNonNegative(studiedMs, 'studiedMs');
+  studiedMs = _clampNonNegative(studiedMs, 'studiedMs');
   _assertPositive(configuredMs, 'configuredMs');
 
   const fraction = studiedMs / configuredMs;
@@ -47,7 +47,7 @@ export function computeCycleProgress(studiedMs, configuredMs) {
  * @returns {number} fração exata (não arredondada)
  */
 export function computeEquivalentCycles(totalStudiedMs, referenceCycleMs) {
-  _assertNonNegative(totalStudiedMs, 'totalStudiedMs');
+  totalStudiedMs = _clampNonNegative(totalStudiedMs, 'totalStudiedMs');
   _assertPositive(referenceCycleMs, 'referenceCycleMs');
   return totalStudiedMs / referenceCycleMs;
 }
@@ -174,7 +174,7 @@ export function formatCycleCount(value, decimals = 1) {
  * @returns {string} ex: "5h30min", "45min"
  */
 export function formatDuration(ms) {
-  _assertNonNegative(ms, 'ms');
+  ms = _clampNonNegative(ms, 'ms');
   const totalMinutes = Math.round(ms / 60000);
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
@@ -206,8 +206,17 @@ function _assertPositive(value, name) {
   }
 }
 
-function _assertNonNegative(value, name) {
-  if (!Number.isFinite(value) || value < 0) {
-    throw new Error(`${name} deve ser um número maior ou igual a zero.`);
+/**
+ * Valida que um valor é um número finito e, se for um negativo pequeno
+ * (jitter de ponto flutuante entre timestamps — fica mais provável com o
+ * acelerador de debug.js, que amplia esse jitter junto com o tempo), trata
+ * como zero em vez de lançar erro: é um caso esperado de exibição, não um
+ * dado inválido. Só lança erro para o que é realmente inválido (NaN,
+ * Infinity, ou não-número).
+ */
+function _clampNonNegative(value, name) {
+  if (!Number.isFinite(value)) {
+    throw new Error(`${name} deve ser um número finito.`);
   }
+  return value < 0 ? 0 : value;
 }
