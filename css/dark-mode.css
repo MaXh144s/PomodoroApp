@@ -63,7 +63,7 @@
 /* Versão escura dos ícones ilustrados (ver os defaults claros em style.css). */
 :root[data-theme="dark"] #btn-preferences img { content: url('../img/settings-icon-dark-theme.png'); }
 :root[data-theme="dark"] #btn-history-export img { content: url('../img/download-icon-dark-theme.png'); }
-:root[data-theme="dark"] #btn-history-import img { content: url('../img/upload-icon-dark-theme.png'); }
+:root[data-theme="dark"] #btn-history-import img { content: url('../img/Upload-icon-dark-theme.png'); }
 :root[data-theme="dark"] #btn-history-trash img { content: url('../img/trash-icon-dark-theme.png'); }
 
 /* "multiply" escurece tudo até sumir num fundo já escuro; "screen" clareia
