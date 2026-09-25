@@ -92,6 +92,7 @@ export class PomodoroApp {
     this._phase = Phase.CONFIG;
     this._timer = null;
     this._cycleId = null;   // identifica o ciclo atual; todos os períodos dele no histórico compartilham este id
+    this._subject = 'Estudo geral'; // assunto do ciclo atual; definido em configure(), mantido durante o ciclo (inclusive após reload)
     this._runPeriod = null; // período de execução em aberto: { startClock } (relógio do cronômetro) — null se o estudo não está rodando
     this._lastPersistAt = 0;
   }
@@ -112,6 +113,7 @@ export class PomodoroApp {
       if (snapshot) {
         this._phase = savedAppState.phase;
         this._cycleId = savedAppState.cycleId ?? _newCycleId();
+        this._subject = savedAppState.subject || 'Estudo geral';
         this._runPeriod = savedAppState.runStartClock != null
           ? { startClock: savedAppState.runStartClock }
           : null;
@@ -141,8 +143,9 @@ export class PomodoroApp {
    * histórico.
    * @param {number} studyMs
    * @param {number} restMs
+   * @param {string} [subject] - assunto do estudo (ex: "Matemática"); vazio/omitido vira "Estudo geral"
    */
-  async configure(studyMs, restMs) {
+  async configure(studyMs, restMs, subject) {
     _assertPositiveMs(studyMs, 'studyMs');
     _assertPositiveMs(restMs, 'restMs');
 
@@ -152,14 +155,20 @@ export class PomodoroApp {
 
     this._settings = { studyMs, restMs };
     await saveSettings(this._settings);
+    this._subject = (subject ?? '').trim() || 'Estudo geral';
 
     this._setPhase(Phase.CONFIG);
     await saveTimerSnapshot(null);
   }
 
   /** Atalho: configura o estudo e aplica automaticamente o descanso padrão (proporção 5:1). */
-  async configureWithDefaultRest(studyMs) {
-    return this.configure(studyMs, computeDefaultRestMs(studyMs));
+  async configureWithDefaultRest(studyMs, subject) {
+    return this.configure(studyMs, computeDefaultRestMs(studyMs), subject);
+  }
+
+  /** @returns {string} assunto do ciclo de estudo atual (ou "Estudo geral" por padrão) */
+  getCurrentSubject() {
+    return this._subject;
   }
 
   /**
@@ -524,6 +533,7 @@ export class PomodoroApp {
       configuredMs: this._timer.getTotalDurationMs(),
       restMs: this._settings.restMs,
       cycleId: this._cycleId,
+      subject: this._subject,
     };
   }
 
@@ -646,6 +656,7 @@ export class PomodoroApp {
       configuredMs: snapshot.totalDuration,
       restMs: this._settings.restMs,
       cycleId: this._cycleId,
+      subject: this._subject,
     });
   }
 
@@ -655,6 +666,7 @@ export class PomodoroApp {
       accountingVersion: ACCOUNTING_VERSION,
       phase: this._phase,
       cycleId: this._cycleId,
+      subject: this._subject,
       runStartClock: this._runPeriod ? this._runPeriod.startClock : null,
     });
     if (this._timer) {

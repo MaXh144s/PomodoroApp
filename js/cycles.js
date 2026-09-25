@@ -124,6 +124,74 @@ export function countDistinctCycles(sessions) {
 }
 
 /**
+ * Normaliza um texto de assunto SÓ para fins de agrupamento (nunca para
+ * exibição): remove acentuação, colapsa espaços duplicados/nas pontas e
+ * ignora maiúsculas/minúsculas. Assim "Matemática", " matemática" e
+ * "MATEMÁTICA" são reconhecidos como o mesmo assunto mesmo com diferenças
+ * de digitação. Assunto vazio/ausente cai em "Estudo geral", igual ao
+ * padrão já usado em createSessionRecord (history.js).
+ * @param {string} [subject]
+ * @returns {string}
+ */
+export function normalizeSubjectKey(subject) {
+  return (subject || 'Estudo geral')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Agrupa sessões por assunto (ver normalizeSubjectKey) e soma, para cada
+ * grupo: quantidade de sessões (ciclos distintos, via countDistinctCycles),
+ * ciclos completos (somados por configuração, como em computeDailySummary —
+ * cobre o caso de o mesmo assunto ter sido estudado com durações
+ * configuradas diferentes) e tempo total estudado.
+ *
+ * O rótulo exibido do grupo é o texto do assunto (com espaços nas pontas
+ * removidos) tal como apareceu na primeira sessão daquele grupo — a
+ * normalização serve só para decidir quem entra em qual grupo, nunca para
+ * o que é mostrado na tela.
+ *
+ * @param {Array<{subject?: string, studiedMs: number, configuredMs: number, cycleId?: string, id?: string}>} sessions
+ * @returns {Array<{subject: string, subjectKey: string, sessionCount: number, completeCycles: number, totalStudiedMs: number}>}
+ *          ordenado do maior tempo estudado para o menor. `subjectKey` é o
+ *          resultado de normalizeSubjectKey() para aquele grupo — usar para
+ *          identificar o assunto de forma estável (ex: ao apagar só aquele
+ *          assunto do histórico), nunca `subject` (rótulo de exibição, pode
+ *          ter variado de digitação entre as sessões do próprio grupo).
+ */
+export function aggregateSessionsBySubject(sessions) {
+  const groups = new Map();
+
+  for (const session of sessions) {
+    const key = normalizeSubjectKey(session.subject);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        subject: (session.subject || 'Estudo geral').trim() || 'Estudo geral',
+        sessions: [],
+      });
+    }
+    groups.get(key).sessions.push(session);
+  }
+
+  return Array.from(groups.entries())
+    .map(([subjectKey, { subject, sessions: groupSessions }]) => {
+      const byConfig = aggregateCyclesByConfig(groupSessions);
+      const completeCycles = byConfig.reduce((sum, g) => sum + g.completeCycles, 0);
+      return {
+        subject,
+        subjectKey,
+        sessionCount: countDistinctCycles(groupSessions),
+        completeCycles,
+        totalStudiedMs: sumStudiedMs(groupSessions),
+      };
+    })
+    .sort((a, b) => b.totalStudiedMs - a.totalStudiedMs);
+}
+
+/**
  * Resumo agregado de todas as sessões de um dia (ou de qualquer conjunto):
  * tempo total estudado, ciclos completos somados (por configuração) e
  * equivalência em uma duração de referência à escolha.

@@ -33,6 +33,8 @@ import {
   sumStudiedMs,
   formatDuration,
   formatCycleCount,
+  aggregateSessionsBySubject,
+  normalizeSubjectKey,
 } from './cycles.js';
 
 const DEFAULT_REFERENCE_CYCLE_MS = 50 * 60 * 1000; // 50min, usado nos exemplos do prompt
@@ -50,9 +52,10 @@ const DEFAULT_REFERENCE_CYCLE_MS = 50 * 60 * 1000; // 50min, usado nos exemplos 
  * @param {number} params.studiedMs - tempo efetivamente estudado neste período
  * @param {number} params.restMs - tempo de descanso configurado/associado a esse ciclo
  * @param {string} [params.cycleId] - identifica o ciclo; todos os períodos do mesmo ciclo compartilham o id
+ * @param {string} [params.subject] - assunto do estudo (ex: "Matemática"); "Estudo geral" se não informado
  * @returns {Object} registro, pronto para ser salvo no histórico
  */
-export function createSessionRecord({ dateStart, dateEnd, configuredMs, studiedMs, restMs, cycleId }) {
+export function createSessionRecord({ dateStart, dateEnd, configuredMs, studiedMs, restMs, cycleId, subject }) {
   const progress = computeCycleProgress(studiedMs, configuredMs);
   const startDate = new Date(dateStart);
   const id = `${dateStart}-${Math.random().toString(36).slice(2, 8)}`;
@@ -66,6 +69,7 @@ export function createSessionRecord({ dateStart, dateEnd, configuredMs, studiedM
     configuredMs,
     studiedMs,
     restMs,
+    subject: subject || 'Estudo geral',
     completeCycles: progress.completeCycles,
     partialFraction: progress.partialFraction,
   };
@@ -86,6 +90,7 @@ export function normalizeSessionRecord(record) {
     cycleId: record.cycleId ?? record.id,
     dateStart: record.dateStart ?? record.startTimestamp ?? null,
     dateEnd: record.dateEnd ?? record.endTimestamp ?? null,
+    subject: record.subject || 'Estudo geral',
   };
 }
 
@@ -166,9 +171,10 @@ export function splitIntervalByLocalDay(startTimestamp, endTimestamp) {
  * @param {number} params.configuredMs
  * @param {number} params.restMs
  * @param {string} [params.cycleId]
+ * @param {string} [params.subject] - assunto do estudo desse ciclo
  * @returns {Promise<Array<Object>>} registros salvos (um por dia envolvido)
  */
-export async function saveStudySegment({ dateStart, dateEnd, configuredMs, restMs, cycleId }) {
+export async function saveStudySegment({ dateStart, dateEnd, configuredMs, restMs, cycleId, subject }) {
   const dayChunks = splitIntervalByLocalDay(dateStart, dateEnd);
   const savedRecords = [];
 
@@ -181,6 +187,7 @@ export async function saveStudySegment({ dateStart, dateEnd, configuredMs, restM
       studiedMs: chunk.ms,
       restMs,
       cycleId,
+      subject,
     });
     await saveCompletedSession(record);
     savedRecords.push(record);
@@ -249,12 +256,12 @@ export async function getLastNDaysSummary(days = 7, referenceCycleMs = DEFAULT_R
  *
  * @param {string} dateKey - formato "YYYY-MM-DD"
  * @param {number} [referenceCycleMs=50min]
- * @returns {Promise<ReturnType<typeof computeDailySummary> & {dateKey: string}>}
+ * @returns {Promise<ReturnType<typeof computeDailySummary> & {dateKey: string, subjects: ReturnType<typeof aggregateSessionsBySubject>}>}
  */
 export async function getDailySummary(dateKey, referenceCycleMs = DEFAULT_REFERENCE_CYCLE_MS) {
   const sessions = await getSessionsForDate(dateKey);
   const summary = computeDailySummary(sessions, referenceCycleMs);
-  return { dateKey, ...summary };
+  return { dateKey, ...summary, subjects: aggregateSessionsBySubject(sessions) };
 }
 
 /** Atalho para getDailySummary() com a data de hoje. */
@@ -265,8 +272,12 @@ export async function getTodaySummary(referenceCycleMs = DEFAULT_REFERENCE_CYCLE
 /**
  * Agrupa TODO o histórico por dia, retornando um resumo por data —
  * útil para uma tela de "histórico completo" (não só o dia atual).
+ * Cada dia também traz `subjects`: as sessões daquele dia agrupadas por
+ * assunto (assuntos "iguais" — ver normalizeSubjectKey em cycles.js — somam
+ * sessões/ciclos/tempo num único grupo; nunca criam um dia separado).
+ *
  * @param {number} [referenceCycleMs=50min]
- * @returns {Promise<Array<ReturnType<typeof computeDailySummary> & {dateKey: string}>>}
+ * @returns {Promise<Array<ReturnType<typeof computeDailySummary> & {dateKey: string, subjects: ReturnType<typeof aggregateSessionsBySubject>}>>}
  *          ordenado do dia mais recente para o mais antigo
  */
 export async function getFullHistorySummary(referenceCycleMs = DEFAULT_REFERENCE_CYCLE_MS) {
@@ -276,7 +287,7 @@ export async function getFullHistorySummary(referenceCycleMs = DEFAULT_REFERENCE
   return dateKeys.map((dateKey) => {
     const daySessions = sessions.filter((s) => s.date === dateKey);
     const summary = computeDailySummary(daySessions, referenceCycleMs);
-    return { dateKey, ...summary };
+    return { dateKey, ...summary, subjects: aggregateSessionsBySubject(daySessions) };
   });
 }
 
@@ -295,6 +306,14 @@ export async function getFullHistorySummary(referenceCycleMs = DEFAULT_REFERENCE
 // simplesmente gera um novo registro para aquele dia, do zero, sem
 // nenhuma lógica extra: getDailySummary()/getFullHistorySummary() só
 // enxergam o que está salvo agora.
+//
+// Além de apagar o dia inteiro (deleteSessionsForDates), também é possível
+// apagar só um assunto específico dentro de um dia (deleteSessionsForSubjects),
+// mantendo os demais assuntos daquele dia intactos. A identificação do
+// assunto usa normalizeSubjectKey() — a mesma chave já usada para agrupar
+// os assuntos em aggregateSessionsBySubject() — para não depender de
+// diferenças de digitação/acentuação/maiúsculas entre sessões do mesmo
+// assunto.
 
 const HISTORY_BACKUP_VERSION = 1;
 
@@ -310,6 +329,36 @@ export async function deleteSessionsForDates(dateKeys) {
   const keys = new Set(Array.isArray(dateKeys) ? dateKeys : [dateKeys]);
   const sessions = await loadSessions();
   const remaining = sessions.filter((s) => !keys.has(s.date));
+  await saveSessions(remaining);
+  return remaining;
+}
+
+/**
+ * Remove do histórico ativo apenas os registros de um assunto específico
+ * dentro de um dia específico, preservando os demais assuntos daquele
+ * mesmo dia. Complementa deleteSessionsForDates() (que apaga o dia
+ * inteiro) para o caso de o usuário querer excluir só uma parte do que foi
+ * registrado num dia.
+ *
+ * @param {Array<{dateKey: string, subjectKey: string}>} entries - cada item
+ *   identifica um par (dia, assunto) a excluir. `subjectKey` deve ser o
+ *   valor já normalizado (ver normalizeSubjectKey() em cycles.js) — o mesmo
+ *   que aggregateSessionsBySubject() expõe em `subjectKey` para cada grupo,
+ *   e não o rótulo de exibição `subject` (que pode variar de digitação).
+ * @returns {Promise<Array<Object>>} sessões restantes após a exclusão
+ */
+export async function deleteSessionsForSubjects(entries) {
+  if (!entries || entries.length === 0) return loadSessions();
+
+  const keys = new Set(entries.map(({ dateKey, subjectKey }) => `${dateKey}::${subjectKey}`));
+  const sessions = await loadSessions();
+
+  const remaining = sessions.filter((rawSession) => {
+    const session = normalizeSessionRecord(rawSession);
+    const key = `${session.date}::${normalizeSubjectKey(session.subject)}`;
+    return !keys.has(key);
+  });
+
   await saveSessions(remaining);
   return remaining;
 }
@@ -385,6 +434,11 @@ function _normalizeImportedRecord(raw) {
     ? raw.configuredMs
     : Math.max(studiedMs, 1);
   const restMs = (Number.isFinite(raw.restMs) && raw.restMs >= 0) ? raw.restMs : 0;
+  // Sem isso, todo registro importado perdia o assunto original e caía no
+  // padrão "Estudo geral" — mesmo quando o backup trazia um assunto próprio
+  // (ex: "Matemática"), ele deixava de ficar agrupado com o resto do
+  // conteúdo daquele assunto depois de importado.
+  const subject = (typeof raw.subject === 'string' && raw.subject.trim()) ? raw.subject.trim() : 'Estudo geral';
 
   const progress = computeCycleProgress(studiedMs, configuredMs);
 
@@ -397,6 +451,7 @@ function _normalizeImportedRecord(raw) {
     configuredMs,
     studiedMs,
     restMs,
+    subject,
     completeCycles: Number.isFinite(raw.completeCycles) ? raw.completeCycles : progress.completeCycles,
     partialFraction: Number.isFinite(raw.partialFraction) ? raw.partialFraction : progress.partialFraction,
   };

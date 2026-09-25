@@ -374,44 +374,194 @@ body {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
-.history-list li {
+/* Cada dia vira seu próprio bloco (fundo levemente recuado em relação ao
+   card branco), em vez de só uma linha fina separando um dia do outro —
+   necessário agora que cada dia também mostra a quebra por assunto, senão
+   fica difícil ver onde um dia termina e o outro começa. */
+.history-list > li {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.9rem;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--color-border);
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 12px);
 }
 
-.history-list li:last-child {
-  border-bottom: none;
-  padding-bottom: 0;
+.history-item-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .history-item-label {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   cursor: pointer;
 }
 
-.history-select-checkbox {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  accent-color: var(--color-primary);
+/* Nível 1 da hierarquia: a data do dia — a "manchete" do bloco. */
+.history-date {
+  font-weight: 700;
+  font-size: 0.95rem;
 }
 
-.history-date {
+/* Nível 1 também, mas o número mais importante do bloco: em vez de texto
+   solto igual ao resto, ganha destaque de "badge" para ser o primeiro
+   número que o olho encontra ao ler cada dia. */
+.history-total-badge {
+  flex-shrink: 0;
+  white-space: nowrap;
+  color: var(--color-text);
+  font-weight: 400;
+  font-size: 0.82rem;
+}
+
+/* Nível 3: quebra por assunto — separada do cabeçalho do dia por uma
+   divisória sutil, deixando claro que está "dentro" daquele dia sem
+   competir visualmente com a data/total (nível 1) acima. */
+.history-subjects {
+  list-style: none;
+  margin: 0;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.history-subject-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Nome do assunto: mais forte que os números ao lado, para ler-se como o
+   "rótulo" da linha; corta com reticências se o assunto for muito longo,
+   em vez de empurrar os números para quebrar linha. */
+.history-subject-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85rem;
   font-weight: 600;
+  color: var(--color-text);
+}
+
+/* Números do assunto: nível mais baixo da hierarquia — apoiam o nome,
+   nunca competem com ele. Largura própria (nowrap) para não ficarem
+   espremidos contra nomes de assunto mais longos. */
+.history-subject-stats {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.history-select-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border);
+  background-color: var(--color-card);
+  cursor: pointer;
+  transition: background-color var(--duration-fast, 120ms) var(--ease-standard, ease),
+    border-color var(--duration-fast, 120ms) var(--ease-standard, ease);
+}
+
+.history-select-checkbox:checked {
+  background-color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.history-select-checkbox:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.history-select-checkbox:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 .history-detail {
   color: var(--color-text-muted);
   font-size: 0.82rem;
+}
+
+/* Botão "Minimizar/Expandir" — criado via JS (ver app.js) e inserido no
+   cabeçalho do card de histórico. Ghost button discreto: não deve competir
+   com o título "Histórico" nem com as ações de exclusão. */
+.history-compact-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  padding: 4px 2px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.history-compact-toggle:hover {
+  color: var(--color-primary);
+}
+
+.history-compact-toggle:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.history-compact-toggle-icon {
+  font-size: 0.65rem;
+  transition: transform var(--duration-fast, 120ms) var(--ease-standard, ease);
+}
+
+.history-compact-toggle[aria-pressed="true"] .history-compact-toggle-icon {
+  transform: rotate(180deg);
+}
+
+/* Modo compacto: some com a quebra por assunto, deixando só data,
+   sessões/ciclos e tempo total de cada dia (ver .history-subjects acima). */
+/* ---------- Modo compacto (minimizado) ----------
+ * Em vez dos blocos com fundo/borda de cada dia (visual padrão acima),
+ * o modo compacto usa uma lista "achatada": sem caixa, sem espaçamento
+ * entre os dias, separados só por uma linha fina — mais discreto, já que
+ * aqui só sobra data + total por dia. A borda inferior de cada item faz
+ * o papel de divisória; o último item não precisa dela (já é o fim da
+ * lista).
+ */
+.history-list.history-list-compact {
+  gap: 0;
+}
+
+.history-list.history-list-compact > li {
+  padding: 12px 4px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--color-border);
+  border-radius: 0;
+}
+
+.history-list.history-list-compact > li:last-child {
+  border-bottom: none;
+}
+
+.history-list.history-list-compact .history-subjects {
+  display: none;
 }
 
 /* ---------- Configuração ---------- */
@@ -580,6 +730,13 @@ body {
 
 .state-badge.rest {
   background: var(--color-rest);
+}
+
+.timer-subject {
+  text-align: right;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  margin: 4px 2px 0;
 }
 
 .timer-display {
@@ -964,9 +1121,44 @@ body {
 }
 
 .modal-card {
+  position: relative;
   max-width: 340px;
   width: 100%;
   margin: 0;
+}
+
+/* Botão "X" para fechar o modal sem escolher nenhuma das opções (ex:
+   clique acidental no "+" durante um estudo em andamento). Usa as
+   variáveis de cor do tema, então já sai correto no escuro sem precisar
+   de nada em dark-mode.css. */
+.modal-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast, 120ms) var(--ease-standard, ease),
+    color var(--duration-fast, 120ms) var(--ease-standard, ease);
+}
+
+.modal-close:hover {
+  background: var(--color-surface-muted, var(--color-border));
+  color: var(--color-text);
+}
+
+.modal-close:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 .modal-detail {

@@ -15,11 +15,12 @@ import {
   getTodayDateKey,
   getSessionsForDate,
   deleteSessionsForDates,
+  deleteSessionsForSubjects,
   buildHistoryBackup,
   validateHistoryBackup,
   commitHistoryImport,
 } from './history.js';
-import { computeCycleProgress, computeEquivalentCycles, formatDuration, formatCycleCount } from './cycles.js';
+import { computeCycleProgress, computeEquivalentCycles, formatDuration, formatCycleCount, normalizeSubjectKey } from './cycles.js';
 import {
   getDefaultPreferences,
   computeRestMsForRatio,
@@ -29,6 +30,7 @@ import {
   isValidDailyGoalMinutes,
   CycleTransitionMode,
   isValidCycleTransitionMode,
+  DEFAULT_SHOW_SUBJECT_IN_TIMER,
 } from './preferences.js';
 import { loadPreferences, savePreferences, loadCustomSound, saveCustomSound, clearCustomSound, saveTheme } from './storage.js';
 import { setAlertCustomSound, setAlertMaxDuration, playPreview, stopPreview, seekPreview, getAudioDuration, getAudioWaveform } from './sound.js';
@@ -73,8 +75,10 @@ const el = {
 
   modalResume: document.getElementById('modal-resume'),
   modalResumeDetail: document.getElementById('modal-resume-detail'),
+  modalResumeQuestion: document.getElementById('modal-resume-question'),
   btnResumeSession: document.getElementById('btn-resume-session'),
   btnNewSession: document.getElementById('btn-new-session'),
+  btnCloseResumeModal: document.getElementById('btn-close-resume-modal'),
 
   btnNew: document.getElementById('btn-new'),
   btnChart: document.getElementById('btn-chart'),
@@ -131,6 +135,7 @@ const el = {
   prefAlarmPresetButtons: Array.from(document.querySelectorAll('#preferences-form [data-preset-alarm-seconds]')),
 
   prefTransitionModeButtons: Array.from(document.querySelectorAll('#pref-transition-mode [data-transition-mode]')),
+  prefShowSubjectButtons: Array.from(document.querySelectorAll('#pref-show-subject [data-show-subject]')),
 
   prefSoundFile: document.getElementById('pref-sound-file'),
   prefSoundCurrent: document.getElementById('pref-sound-current'),
@@ -147,9 +152,11 @@ const el = {
   configForm: document.getElementById('config-form'),
   inputStudy: document.getElementById('input-study'),
   inputRest: document.getElementById('input-rest'),
+  inputSubject: document.getElementById('input-subject'),
 
   btnTimerHome: document.getElementById('btn-timer-home'),
   timerState: document.getElementById('timer-state'),
+  timerSubject: document.getElementById('timer-subject'),
   timerDisplay: document.querySelector('.timer-display'),
   progressRingFg: document.getElementById('progress-ring-fg'),
   timerRemaining: document.getElementById('timer-remaining'),
@@ -296,6 +303,7 @@ function renderPreferencesForm() {
   el.prefRatioRest.value = currentPreferences.ratioRestPart;
   el.prefAlarmDuration.value = currentPreferences.alarmDurationSeconds;
   _setTransitionModeButtonsState(currentPreferences.cycleTransitionMode);
+  _setShowSubjectButtonsState(currentPreferences.showSubjectInTimer);
   updatePreferencesWarning();
 
   pendingCustomSound = undefined; // usuário ainda não mexeu no som nesta visita ao formulário
@@ -561,6 +569,26 @@ el.prefTransitionModeButtons.forEach((btn) => {
   });
 });
 
+// Mesmo padrão do toggle de modo de transição, para mostrar/ocultar o
+// assunto do ciclo no cronômetro. Só controla a EXIBIÇÃO — o assunto
+// continua salvo no ciclo (history.js) independente deste toggle.
+function _setShowSubjectButtonsState(showSubject) {
+  el.prefShowSubjectButtons.forEach((btn) => {
+    btn.setAttribute('aria-pressed', String((btn.dataset.showSubject === 'true') === showSubject));
+  });
+}
+
+function _selectedShowSubject() {
+  const active = el.prefShowSubjectButtons.find((btn) => btn.getAttribute('aria-pressed') === 'true');
+  return active ? active.dataset.showSubject === 'true' : DEFAULT_SHOW_SUBJECT_IN_TIMER;
+}
+
+el.prefShowSubjectButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    _setShowSubjectButtonsState(btn.dataset.showSubject === 'true');
+  });
+});
+
 el.trimRange.addEventListener('input', () => {
   pendingTrimStartSeconds = Number(el.trimRange.value) || 0;
   _renderTrimVisual(pendingTrimStartSeconds, _formAlarmDurationSeconds(), pendingAudioDurationSeconds || 0);
@@ -601,6 +629,7 @@ el.preferencesForm.addEventListener('submit', async (event) => {
   const ratioRestPart = Number(el.prefRatioRest.value);
   const alarmDurationSeconds = clampAlarmDurationSeconds(Number(el.prefAlarmDuration.value));
   const cycleTransitionMode = _selectedTransitionMode();
+  const showSubjectInTimer = _selectedShowSubject();
 
   if (
     !(defaultStudyMinutes > 0)
@@ -611,7 +640,7 @@ el.preferencesForm.addEventListener('submit', async (event) => {
     || !isValidCycleTransitionMode(cycleTransitionMode)
   ) return;
 
-  currentPreferences = { defaultStudyMinutes, dailyGoalMinutes, ratioStudyPart, ratioRestPart, alarmDurationSeconds, cycleTransitionMode };
+  currentPreferences = { defaultStudyMinutes, dailyGoalMinutes, ratioStudyPart, ratioRestPart, alarmDurationSeconds, cycleTransitionMode, showSubjectInTimer };
   await savePreferences(currentPreferences);
   setAlertMaxDuration(alarmDurationSeconds * 1000);
   app.setCycleTransitionMode(cycleTransitionMode);
@@ -772,14 +801,47 @@ function _formatTime(timestamp) {
 // Tudo aqui opera sobre o mesmo histórico de sessões já usado pelo resto do
 // app (history.js/storage.js) — não existe uma lista paralela. O modo de
 // seleção só existe enquanto a lixeira está aberta; a exclusão em si
-// (deleteSessionsForDates) e a importação (validateHistoryBackup +
-// commitHistoryImport) vivem em history.js.
+// (deleteSessionsForDates/deleteSessionsForSubjects) e a importação
+// (validateHistoryBackup + commitHistoryImport) vivem em history.js.
+//
+// A seleção tem dois níveis independentes:
+// - selectedHistoryDates: dias inteiros (checkbox no cabeçalho do dia).
+// - selectedHistorySubjects: assuntos específicos dentro de um dia
+//   (checkbox em cada linha de assunto), chaveados como "dateKey::subjectKey"
+//   (subjectKey já normalizado, igual ao exposto por aggregateSessionsBySubject
+//   em cycles.js). Selecionar o dia inteiro torna redundante qualquer seleção
+//   de assunto avulsa dentro dele — por isso o checkbox de cada assunto fica
+//   desabilitado (e marcado) enquanto o dia estiver selecionado.
 
 let lastFullHistorySummary = [];
 let historySelectionMode = false;
 const selectedHistoryDates = new Set();
+const selectedHistorySubjects = new Set();
 let pendingDeleteDateKeys = null;
+let pendingDeleteSubjectEntries = null;
 let pendingImportSessions = null;
+
+// Modo compacto: oculta a quebra por assunto de cada dia, deixando só
+// data, sessões/ciclos e tempo total visíveis (ver .history-list-compact
+// em style.css). O botão é criado aqui via JS — index.html não define um
+// elemento próprio para ele — e inserido no cabeçalho do card de
+// histórico; como fica dentro de el.homeHistory, some junto com o card
+// inteiro quando não há histórico (não precisa de lógica própria pra isso).
+let historyCompactMode = false;
+
+const btnHistoryCompactToggle = document.createElement('button');
+btnHistoryCompactToggle.type = 'button';
+btnHistoryCompactToggle.className = 'history-compact-toggle';
+btnHistoryCompactToggle.setAttribute('aria-pressed', 'false');
+btnHistoryCompactToggle.innerHTML = '<span class="history-compact-toggle-label">Minimizar</span><span class="history-compact-toggle-icon">▾</span>';
+btnHistoryCompactToggle.addEventListener('click', () => {
+  historyCompactMode = !historyCompactMode;
+  btnHistoryCompactToggle.setAttribute('aria-pressed', String(historyCompactMode));
+  btnHistoryCompactToggle.querySelector('.history-compact-toggle-label').textContent =
+    historyCompactMode ? 'Expandir' : 'Minimizar';
+  el.homeHistoryList.classList.toggle('history-list-compact', historyCompactMode);
+});
+(el.homeHistory.querySelector('.history-card-header') || el.homeHistory).appendChild(btnHistoryCompactToggle);
 
 function _renderHistoryList() {
   const fullHistory = lastFullHistorySummary;
@@ -794,38 +856,83 @@ function _renderHistoryList() {
   el.homeHistoryList.innerHTML = fullHistory
     .map((day) => {
       const dayLabels = buildDailySummaryLabels(day);
+      const daySelected = selectedHistoryDates.has(day.dateKey);
       const checkbox = historySelectionMode
-        ? `<input type="checkbox" class="history-select-checkbox" data-date-key="${day.dateKey}" ${selectedHistoryDates.has(day.dateKey) ? 'checked' : ''} aria-label="Selecionar ${_formatDateLabel(day.dateKey)}">`
+        ? `<input type="checkbox" class="history-select-checkbox" data-date-key="${day.dateKey}" ${daySelected ? 'checked' : ''} aria-label="Selecionar ${_formatDateLabel(day.dateKey)}">`
         : '';
+      const subjectsHtml = day.subjects
+        .map((subj) => {
+          // Selecionar o dia inteiro já cobre todos os assuntos dele: o
+          // checkbox do assunto aparece marcado e desabilitado nesse caso,
+          // em vez de deixar duas seleções redundantes (e potencialmente
+          // divergentes) coexistindo.
+          const subjectKey = `${day.dateKey}::${subj.subjectKey}`;
+          const subjectChecked = daySelected || selectedHistorySubjects.has(subjectKey);
+          const subjectCheckbox = historySelectionMode
+            ? `<input type="checkbox" class="history-select-checkbox history-select-subject-checkbox" data-date-key="${day.dateKey}" data-subject-key="${subj.subjectKey}" ${subjectChecked ? 'checked' : ''} ${daySelected ? 'disabled' : ''} aria-label="Selecionar ${subj.subject} de ${_formatDateLabel(day.dateKey)}">`
+            : '';
+          return `
+            <li class="history-subject-item">
+              ${subjectCheckbox}
+              <span class="history-subject-name">${subj.subject}</span>
+              <span class="history-subject-stats">${subj.sessionCount} sessão(ões) · ${subj.completeCycles} ciclo(s) · ${formatDuration(subj.totalStudiedMs)}</span>
+            </li>
+          `;
+        })
+        .join('');
       return `
         <li data-date-key="${day.dateKey}">
-          <label class="history-item-label">
-            ${checkbox}
-            <span>
-              <span class="history-date">${_formatDateLabel(day.dateKey)}</span><br>
-              <span class="history-detail">${day.sessionCount} sessão(ões) · ${dayLabels.totalCompleteCycles} ciclos completos</span>
-            </span>
-          </label>
-          <span class="history-detail">${dayLabels.totalStudiedLabel}</span>
+          <div class="history-item-header">
+            <label class="history-item-label">
+              ${checkbox}
+              <span>
+                <span class="history-date">${_formatDateLabel(day.dateKey)}</span><br>
+                <span class="history-detail">${day.sessionCount} sessão(ões) · ${dayLabels.totalCompleteCycles} ciclos completos</span>
+              </span>
+            </label>
+            <span class="history-total-badge">${dayLabels.totalStudiedLabel}</span>
+          </div>
+          <ul class="history-subjects">${subjectsHtml}</ul>
         </li>
       `;
     })
     .join('');
 
   if (historySelectionMode) {
-    el.homeHistoryList.querySelectorAll('.history-select-checkbox').forEach((checkbox) => {
+    el.homeHistoryList.querySelectorAll('.history-select-checkbox:not(.history-select-subject-checkbox)').forEach((checkbox) => {
       checkbox.addEventListener('change', () => {
         const dateKey = checkbox.dataset.dateKey;
-        if (checkbox.checked) selectedHistoryDates.add(dateKey);
-        else selectedHistoryDates.delete(dateKey);
+        if (checkbox.checked) {
+          selectedHistoryDates.add(dateKey);
+          _clearSubjectSelectionsForDate(dateKey);
+        } else {
+          selectedHistoryDates.delete(dateKey);
+        }
+        _updateHistorySelectionUI();
+        _renderHistoryList();
+      });
+    });
+
+    el.homeHistoryList.querySelectorAll('.history-select-subject-checkbox').forEach((checkbox) => {
+      checkbox.addEventListener('change', () => {
+        const key = `${checkbox.dataset.dateKey}::${checkbox.dataset.subjectKey}`;
+        if (checkbox.checked) selectedHistorySubjects.add(key);
+        else selectedHistorySubjects.delete(key);
         _updateHistorySelectionUI();
       });
     });
   }
 }
 
+/** Remove da seleção de assuntos avulsos todos os itens de um dia (usado ao marcar o dia inteiro). */
+function _clearSubjectSelectionsForDate(dateKey) {
+  for (const key of selectedHistorySubjects) {
+    if (key.startsWith(`${dateKey}::`)) selectedHistorySubjects.delete(key);
+  }
+}
+
 function _updateHistorySelectionUI() {
-  const count = selectedHistoryDates.size;
+  const count = selectedHistoryDates.size + selectedHistorySubjects.size;
   el.historySelectionCount.textContent = count > 0 ? `${count} selecionado(s)` : '';
   el.btnHistoryDeleteSelected.disabled = count === 0;
 }
@@ -833,6 +940,7 @@ function _updateHistorySelectionUI() {
 function _exitHistorySelectionMode() {
   historySelectionMode = false;
   selectedHistoryDates.clear();
+  selectedHistorySubjects.clear();
   el.historySelectionActions.hidden = true;
 }
 
@@ -840,7 +948,20 @@ el.btnHistoryTrash.addEventListener('click', () => {
   if (lastFullHistorySummary.length === 0) return;
   historySelectionMode = !historySelectionMode;
   selectedHistoryDates.clear();
+  selectedHistorySubjects.clear();
   el.historySelectionActions.hidden = !historySelectionMode;
+
+  // A seleção por assunto depende de ver os assuntos de cada dia, que o
+  // modo compacto esconde (ver .history-list-compact em style.css). Ao
+  // entrar no modo de seleção, expande automaticamente para não escondam
+  // a única forma de selecionar um assunto específico.
+  if (historySelectionMode && historyCompactMode) {
+    historyCompactMode = false;
+    btnHistoryCompactToggle.setAttribute('aria-pressed', 'false');
+    btnHistoryCompactToggle.querySelector('.history-compact-toggle-label').textContent = 'Minimizar';
+    el.homeHistoryList.classList.remove('history-list-compact');
+  }
+
   _updateHistorySelectionUI();
   _renderHistoryList();
 });
@@ -853,16 +974,28 @@ el.btnHistorySelectionCancel.addEventListener('click', () => {
 // ---------- Exclusão (com confirmação mostrando o que será excluído) ----------
 
 el.btnHistoryDeleteSelected.addEventListener('click', async () => {
-  if (selectedHistoryDates.size === 0) return;
-  await _openDeleteHistoryModal(Array.from(selectedHistoryDates));
+  if (selectedHistoryDates.size === 0 && selectedHistorySubjects.size === 0) return;
+
+  const subjectEntries = Array.from(selectedHistorySubjects).map((key) => {
+    const [dateKey, subjectKey] = key.split('::');
+    return { dateKey, subjectKey };
+  });
+
+  await _openDeleteHistoryModal(Array.from(selectedHistoryDates), subjectEntries);
 });
 
-async function _openDeleteHistoryModal(dateKeys) {
+/**
+ * @param {Array<string>} dateKeys - dias inteiros a excluir
+ * @param {Array<{dateKey: string, subjectKey: string}>} [subjectEntries] - assuntos específicos (dentro de dias que NÃO foram selecionados inteiros) a excluir
+ */
+async function _openDeleteHistoryModal(dateKeys, subjectEntries = []) {
   pendingDeleteDateKeys = dateKeys;
+  pendingDeleteSubjectEntries = subjectEntries;
 
-  el.modalDeleteTitle.textContent = dateKeys.length === 1
-    ? 'Excluir histórico do dia'
-    : `Excluir histórico de ${dateKeys.length} dias`;
+  const totalCount = dateKeys.length + subjectEntries.length;
+  el.modalDeleteTitle.textContent = totalCount === 1
+    ? (dateKeys.length === 1 ? 'Excluir histórico do dia' : 'Excluir assunto do histórico')
+    : `Excluir ${totalCount} itens do histórico`;
 
   const daysDetail = await Promise.all(dateKeys.map(async (dateKey) => {
     const daySummary = lastFullHistorySummary.find((d) => d.dateKey === dateKey);
@@ -885,20 +1018,51 @@ async function _openDeleteHistoryModal(dateKeys) {
     `;
   }));
 
-  el.modalDeleteDetails.innerHTML = daysDetail.join('');
+  // Cada item aqui é um assunto dentro de um dia que NÃO foi selecionado
+  // por inteiro (ver _clearSubjectSelectionsForDate) — por isso mostra só
+  // as sessões daquele assunto, e deixa explícito que o resto do dia fica.
+  const subjectsDetail = await Promise.all(subjectEntries.map(async ({ dateKey, subjectKey }) => {
+    const daySummary = lastFullHistorySummary.find((d) => d.dateKey === dateKey);
+    const subject = daySummary?.subjects.find((s) => s.subjectKey === subjectKey);
+    const sessions = await getSessionsForDate(dateKey);
+    const periods = sessions
+      .filter((s) => normalizeSubjectKey(s.subject) === subjectKey)
+      .sort((a, b) => a.dateStart - b.dateStart)
+      .map((s) => `${_formatTime(s.dateStart)}–${_formatTime(s.dateEnd)} (${formatDuration(s.studiedMs)})`)
+      .join(', ') || '—';
+
+    return `
+      <p class="modal-delete-day">
+        <strong>${_formatDateLabel(dateKey)} · ${subject ? subject.subject : 'Assunto'}</strong><br>
+        Tempo estudado: ${subject ? formatDuration(subject.totalStudiedMs) : '—'}<br>
+        Ciclos completos: ${subject ? subject.completeCycles : 0}<br>
+        Sessões: ${subject ? subject.sessionCount : 0}<br>
+        Períodos de estudo: ${periods}<br>
+        <span class="modal-delete-note">Os demais assuntos desse dia não serão afetados.</span>
+      </p>
+    `;
+  }));
+
+  el.modalDeleteDetails.innerHTML = daysDetail.join('') + subjectsDetail.join('');
   el.modalDeleteHistory.hidden = false;
 }
 
 function _closeDeleteHistoryModal() {
   el.modalDeleteHistory.hidden = true;
   pendingDeleteDateKeys = null;
+  pendingDeleteSubjectEntries = null;
 }
 
 el.btnDeleteHistoryCancel.addEventListener('click', _closeDeleteHistoryModal);
 
 el.btnDeleteHistoryConfirm.addEventListener('click', async () => {
-  if (!pendingDeleteDateKeys) return;
-  await deleteSessionsForDates(pendingDeleteDateKeys);
+  const hasDayDeletes = pendingDeleteDateKeys && pendingDeleteDateKeys.length > 0;
+  const hasSubjectDeletes = pendingDeleteSubjectEntries && pendingDeleteSubjectEntries.length > 0;
+  if (!hasDayDeletes && !hasSubjectDeletes) return;
+
+  if (hasDayDeletes) await deleteSessionsForDates(pendingDeleteDateKeys);
+  if (hasSubjectDeletes) await deleteSessionsForSubjects(pendingDeleteSubjectEntries);
+
   _closeDeleteHistoryModal();
   await refreshTodayBase();
   await renderHome();
@@ -1126,6 +1290,7 @@ function showConfigView() {
   restManuallyEdited = false;
   el.inputStudy.value = currentPreferences.defaultStudyMinutes;
   el.inputRest.value = _suggestRestMinutes(currentPreferences.defaultStudyMinutes);
+  el.inputSubject.value = '';
   showView('config', 'forward');
 }
 
@@ -1140,6 +1305,7 @@ function _openResumeModal() {
   } else {
     el.modalResumeDetail.textContent = '';
   }
+  el.modalResumeQuestion.textContent = `Deseja continuar o ciclo de "${app.getCurrentSubject()}"?`;
   el.modalResume.hidden = false;
 }
 
@@ -1169,6 +1335,19 @@ el.btnNewSession.addEventListener('click', async () => {
   await refreshTodayBase();
   showConfigView();
 });
+
+// Clique acidental no "+": fecha o modal sem escolher nada, sem tocar na
+// sessão pausada (nem retoma, nem descarta) — o usuário só volta pra onde
+// já estava.
+// Guard: se o index.html carregado for uma versão antiga (sem o botão "×"
+// no modal), el.btnCloseResumeModal vem null — sem este "if", o erro ao
+// chamar addEventListener em null interromperia todo o app.js a partir
+// daqui, incluindo o carregamento do histórico.
+if (el.btnCloseResumeModal) {
+  el.btnCloseResumeModal.addEventListener('click', () => {
+    _closeResumeModal();
+  });
+}
 
 el.btnNew.addEventListener('click', async () => {
   // Só se aplica ao estudo (não ao descanso): se houver uma sessão pausada
@@ -1216,7 +1395,7 @@ el.configForm.addEventListener('submit', async (event) => {
 
   restManuallyEdited = false;
   _requestNotificationPermissionIfNeeded();
-  await app.configure(studyMin * 60 * 1000, restMin * 60 * 1000);
+  await app.configure(studyMin * 60 * 1000, restMin * 60 * 1000, el.inputSubject.value);
   app.startStudy();
 });
 
@@ -1227,6 +1406,13 @@ async function renderTimerShell(phase) {
   el.timerState.textContent = isStudy ? 'ESTUDO' : 'DESCANSO';
   el.timerState.classList.toggle('rest', !isStudy);
   el.timerDisplay.classList.toggle('rest', !isStudy);
+
+  if (currentPreferences.showSubjectInTimer) {
+    el.timerSubject.textContent = app.getCurrentSubject();
+    el.timerSubject.hidden = false;
+  } else {
+    el.timerSubject.hidden = true;
+  }
 
   // Estudo nunca diminui: some com os botões -1min/-5min nessa fase.
   el.timeAdjustButtons.forEach((btn) => {

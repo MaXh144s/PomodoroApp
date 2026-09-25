@@ -60,9 +60,10 @@
 
   <div id="modal-resume" class="modal-overlay" hidden>
     <div class="card alert-box modal-card">
+      <button id="btn-close-resume-modal" class="modal-close" aria-label="Fechar" title="Fechar">×</button>
       <h2>Última sessão inacabada</h2>
       <p id="modal-resume-detail" class="modal-detail"></p>
-      <p class="modal-detail">Deseja continuar de onde parou ou começar uma nova sessão?</p>
+      <p id="modal-resume-question" class="modal-detail"></p>
       <div class="alert-actions">
         <button id="btn-resume-session" class="btn btn-secondary">Continuar</button>
         <button id="btn-new-session" class="btn btn-primary">Nova sessão</button>
@@ -247,6 +248,16 @@
       <p class="field-hint">No modo automático, o app avança sozinho para o próximo ciclo quando o alarme parar. Em "Clicar para continuar", o alarme para sozinho, mas o próximo ciclo só começa quando você tocar em "Continuar agora" — assim o cronômetro não fica rodando sozinho se você esquecer.</p>
 
       <label class="field">
+        <span>Assunto no cronômetro</span>
+        <div class="segmented-control" id="pref-show-subject">
+          <button type="button" class="segmented-option" data-show-subject="true" aria-pressed="false">Mostrar</button>
+          <button type="button" class="segmented-option" data-show-subject="false" aria-pressed="true">Ocultar</button>
+        </div>
+      </label>
+
+      <p class="field-hint">Exibe o assunto do ciclo atual abaixo de ESTUDO/DESCANSO no cronômetro. O assunto continua salvo no ciclo mesmo com a exibição desativada.</p>
+
+      <label class="field">
         <span>Som do alerta</span>
         <input type="file" id="pref-sound-file" accept="audio/*">
         <p id="pref-sound-current" class="field-hint">Usando o beep padrão do app.</p>
@@ -291,6 +302,11 @@
         <input type="number" id="input-rest" min="1" step="1" value="5" required>
       </label>
 
+      <label class="field">
+        <span>Assunto do estudo (opcional)</span>
+        <input type="text" id="input-subject" maxlength="60" placeholder="Ex: Matemática">
+      </label>
+
       <p class="field-hint">Proporção padrão 5:1 (o descanso é sugerido automaticamente, mas você pode ajustar).</p>
 
       <button type="submit" class="btn btn-primary">Iniciar estudo</button>
@@ -303,6 +319,8 @@
       <button id="btn-timer-home" class="btn-icon" aria-label="Início">←</button>
       <span id="timer-state" class="state-badge">ESTUDO</span>
     </header>
+
+    <p id="timer-subject" class="timer-subject" hidden></p>
 
     <div class="timer-display">
       <svg class="progress-ring" viewBox="0 0 200 200">
