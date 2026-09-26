@@ -19,6 +19,7 @@ export const STORAGE_KEYS = Object.freeze({
   PREFERENCES: 'pomodoro:preferences', // preferências do usuário (proporção padrão e duração inicial sugerida)
   CUSTOM_SOUND: 'pomodoro:customSound', // toque customizado (dataURL de áudio) escolhido pelo usuário para o alerta
   THEME: 'pomodoro:theme',             // tema escolhido manualmente ('light' | 'dark'); ausente = segue o sistema
+  KNOWN_SUBJECTS: 'pomodoro:knownSubjects', // assuntos já digitados pelo usuário, usados para sugestão/autocomplete
 });
 
 /**
@@ -229,4 +230,15 @@ export async function saveTheme(theme) {
 /** Apaga todos os dados do app (configurações, sessões, snapshots, estado). */
 export async function clearAllData() {
   return storage.clear();
+}
+
+/** @returns {Promise<Array<string>>} assuntos já digitados pelo usuário (nunca null, sempre array) */
+export async function loadKnownSubjects() {
+  const subjects = await storage.get(STORAGE_KEYS.KNOWN_SUBJECTS);
+  return Array.isArray(subjects) ? subjects : [];
+}
+
+/** @param {Array<string>} subjects */
+export async function saveKnownSubjects(subjects) {
+  return storage.set(STORAGE_KEYS.KNOWN_SUBJECTS, subjects);
 }

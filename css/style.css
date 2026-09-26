@@ -265,7 +265,7 @@ body {
 
 .history-manage-actions {
   display: flex;
-  justify-content: space-between;
+  justify-content: space-evenly;
   margin-top: 14px;
 }
 
@@ -274,8 +274,8 @@ body {
  * visual de pílula de sempre, sem herdar nada disto. */
 .history-manage-actions .btn-chip {
   flex: 0 0 auto;
-  width: 44px;
-  height: 44px;
+  width: 25px;
+  height: 25px;
   padding: 0;
   border-radius: 50%;
   display: flex;
@@ -297,8 +297,10 @@ body {
 }
 
 .history-manage-actions .btn-icon-img {
-  width: 18px;
-  height: 18px;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%; /* acompanha o recorte circular do botão nas bordas da imagem */
   transition: transform var(--duration-fast, 120ms) var(--ease-standard, ease);
 }
 
@@ -342,6 +344,13 @@ body {
 
 .history-card-header {
   display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 30px;
+}
+
+.history-card-header-top {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -356,6 +365,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
 }
 
 .history-selection-actions[hidden] {
@@ -469,19 +479,30 @@ body {
   appearance: none;
   -webkit-appearance: none;
   flex: none;
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   border: 1.5px solid var(--color-border);
   background-color: var(--color-card);
   cursor: pointer;
-  transition: background-color var(--duration-fast, 120ms) var(--ease-standard, ease),
+  transition: background var(--duration-fast, 120ms) var(--ease-standard, ease),
     border-color var(--duration-fast, 120ms) var(--ease-standard, ease);
 }
 
+/* Marcado: em vez de uma bolinha lisa totalmente preenchida, um "alvo" —
+ * anel colorido na borda, um vão na cor do card e um miolo preenchido no
+ * centro — como o ícone de referência. Um único radial-gradient desenha as
+ * três faixas de uma vez (bem mais barato que pseudo-elementos): miolo
+ * preenchido até 58%, vão até 76%, anel preenchido no resto. */
 .history-select-checkbox:checked {
-  background-color: var(--color-primary);
   border-color: var(--color-primary);
+  background:
+    radial-gradient(
+      circle,
+      var(--color-primary) 0 58%,
+      var(--color-card) 58% 76%,
+      var(--color-primary) 76% 100%
+    );
 }
 
 .history-select-checkbox:disabled {
@@ -589,6 +610,7 @@ body {
   gap: 6px;
   font-size: 0.9rem;
   color: var(--color-text-muted);
+  position: relative; /* âncora para o dropdown de sugestões (.field-autocomplete) */
 }
 
 .field input {
@@ -603,6 +625,61 @@ body {
   font-size: 0.8rem;
   color: var(--color-text-muted);
   margin: -6px 0 0;
+}
+
+/* ---------- Sugestões de assunto (autocomplete) ----------
+ * Dropdown que aparece sob o campo de assunto (formulário de estudo e
+ * filtro personalizado do gráfico) com os assuntos já digitados antes que
+ * combinam, por prefixo, com o que está sendo digitado (ver
+ * filterKnownSubjects em cycles.js). Nunca some sozinho: quem controla a
+ * exibição é o JS (app.js), conforme o usuário digita, seleciona um item
+ * ou sai do campo. */
+.subject-suggestions {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  margin: 4px 0 0;
+  padding: 6px;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md, 0 8px 24px rgba(43, 43, 43, 0.1));
+}
+
+.subject-suggestions[hidden] {
+  display: none;
+}
+
+.subject-suggestions li {
+  margin: 0;
+}
+
+.subject-suggestion {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.subject-suggestion:hover,
+.subject-suggestion:focus-visible {
+  background: var(--color-surface-muted, var(--color-bg));
+}
+
+.subject-suggestion:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
 }
 
 .segmented-control {
@@ -717,6 +794,16 @@ body {
 
 /* ---------- Cronômetro ---------- */
 
+/* Cabeçalho do cronômetro: o assunto é centralizado por posição absoluta em
+   relação à LARGURA TOTAL do header (mesmo container/largura do
+   .timer-display, centralizado por margin:auto mais abaixo) — não em relação
+   ao espaço entre o botão e o badge, que têm larguras diferentes ("←" vs
+   "DESCANSO") e deixariam o centro óptico desalinhado do centro real da tela.
+   position:relative aqui serve só de referência para esse posicionamento. */
+#view-timer .view-header {
+  position: relative;
+}
+
 .state-badge {
   margin-left: auto;
   padding: 6px 14px;
@@ -733,10 +820,23 @@ body {
 }
 
 .timer-subject {
-  text-align: right;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  /* Reserva espaço para o botão de voltar e o badge não ficarem cobertos —
+     folga generosa o bastante para caber "DESCANSO" (o mais largo dos dois
+     estados) de cada lado; o texto trunca com "..." antes de chegar lá. */
+  max-width: calc(100% - 220px);
+  margin: 0;
   color: var(--color-text-muted);
   font-size: 0.85rem;
-  margin: 4px 2px 0;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
 }
 
 .timer-display {
@@ -845,6 +945,28 @@ body {
 }
 
 /* ---------- Gráfico semanal ---------- */
+
+/* Alternância entre "Estudo geral" (todos os assuntos, comportamento
+   histórico) e "Estudo personalizado" (filtra por um assunto digitado —
+   ver chart-subject-field abaixo). Mesmo padrão visual dos outros
+   segmented-control do app (Preferências). */
+.chart-scope-control {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+/* Reaproveita .field (ver Configurações), só remove a cor "muted" do rótulo
+   padrão e o espaçamento externo que .field não tem por padrão nesse
+   contexto (o gap já é dado pelo container acima). */
+.chart-subject-field {
+  margin: 0;
+}
+
+.chart-subject-field[hidden] {
+  display: none;
+}
 
 .chart-plot {
   display: flex;

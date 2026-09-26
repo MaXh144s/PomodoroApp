@@ -147,7 +147,9 @@
 
     <div id="home-history" class="card history-card" hidden>
       <div class="history-card-header">
-        <p class="card-title">Histórico</p>
+        <div class="history-card-header-top">
+          <p class="card-title">Histórico</p>
+        </div>
         <div id="history-selection-actions" class="history-selection-actions" hidden>
           <span id="history-selection-count" class="history-selection-count"></span>
           <button id="btn-history-delete-selected" class="btn btn-danger" disabled>Excluir</button>
@@ -166,9 +168,22 @@
     </header>
 
     <div class="card chart-card">
-      <p class="card-title">Tempo estudado por dia</p>
+      <p id="chart-title" class="card-title">Tempo estudado por dia</p>
+
+      <div class="chart-scope-control">
+        <div class="segmented-control" id="chart-scope">
+          <button type="button" class="segmented-option" data-chart-scope="all" aria-pressed="true">Estudo geral</button>
+          <button type="button" class="segmented-option" data-chart-scope="subject" aria-pressed="false">Estudo personalizado</button>
+        </div>
+        <label class="field chart-subject-field field-autocomplete" id="chart-subject-field" hidden>
+          <span>Assunto</span>
+          <input type="text" id="chart-subject-input" maxlength="60" placeholder="Ex: Matemática" autocomplete="off">
+          <ul id="chart-subject-suggestions" class="subject-suggestions" hidden></ul>
+        </label>
+      </div>
+
       <div id="chart-plot" class="chart-plot">
-        <div class="chart-axis">
+        <div id="chart-axis" class="chart-axis">
           <span id="chart-goal-tag" class="chart-axis-tag chart-axis-tag--goal" hidden></span>
           <span id="chart-avg-tag" class="chart-axis-tag chart-axis-tag--avg" hidden></span>
         </div>
@@ -250,12 +265,22 @@
       <label class="field">
         <span>Assunto no cronômetro</span>
         <div class="segmented-control" id="pref-show-subject">
-          <button type="button" class="segmented-option" data-show-subject="true" aria-pressed="false">Mostrar</button>
-          <button type="button" class="segmented-option" data-show-subject="false" aria-pressed="true">Ocultar</button>
+          <button type="button" class="segmented-option" data-show-subject="true" aria-pressed="true">Mostrar</button>
+          <button type="button" class="segmented-option" data-show-subject="false" aria-pressed="false">Ocultar</button>
         </div>
       </label>
 
       <p class="field-hint">Exibe o assunto do ciclo atual abaixo de ESTUDO/DESCANSO no cronômetro. O assunto continua salvo no ciclo mesmo com a exibição desativada.</p>
+
+      <label class="field">
+        <span>Tempo em "Estudado hoje"</span>
+        <div class="segmented-control" id="pref-today-total-scope">
+          <button type="button" class="segmented-option" data-today-total-scope="all" aria-pressed="true">Total do dia</button>
+          <button type="button" class="segmented-option" data-today-total-scope="subject" aria-pressed="false">Só este assunto</button>
+        </div>
+      </label>
+
+      <p class="field-hint">"Total do dia" soma todos os assuntos estudados hoje. "Só este assunto" mostra apenas o tempo estudado hoje no assunto do ciclo atual.</p>
 
       <label class="field">
         <span>Som do alerta</span>
@@ -302,9 +327,10 @@
         <input type="number" id="input-rest" min="1" step="1" value="5" required>
       </label>
 
-      <label class="field">
+      <label class="field field-autocomplete">
         <span>Assunto do estudo (opcional)</span>
-        <input type="text" id="input-subject" maxlength="60" placeholder="Ex: Matemática">
+        <input type="text" id="input-subject" maxlength="60" placeholder="Ex: Matemática" autocomplete="off">
+        <ul id="subject-suggestions" class="subject-suggestions" hidden></ul>
       </label>
 
       <p class="field-hint">Proporção padrão 5:1 (o descanso é sugerido automaticamente, mas você pode ajustar).</p>
@@ -317,10 +343,9 @@
   <section id="view-timer" class="view" hidden>
     <header class="view-header">
       <button id="btn-timer-home" class="btn-icon" aria-label="Início">←</button>
+      <p id="timer-subject" class="timer-subject" hidden></p>
       <span id="timer-state" class="state-badge">ESTUDO</span>
     </header>
-
-    <p id="timer-subject" class="timer-subject" hidden></p>
 
     <div class="timer-display">
       <svg class="progress-ring" viewBox="0 0 200 200">

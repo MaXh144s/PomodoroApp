@@ -25,6 +25,8 @@ import {
   appendSession,
   loadSessions,
   saveSessions,
+  loadKnownSubjects,
+  saveKnownSubjects,
 } from './storage.js';
 
 import {
@@ -35,6 +37,8 @@ import {
   formatCycleCount,
   aggregateSessionsBySubject,
   normalizeSubjectKey,
+  normalizeForPrefixMatch,
+  filterKnownSubjects,
 } from './cycles.js';
 
 const DEFAULT_REFERENCE_CYCLE_MS = 50 * 60 * 1000; // 50min, usado nos exemplos do prompt
@@ -196,6 +200,51 @@ export async function saveStudySegment({ dateStart, dateEnd, configuredMs, restM
   return savedRecords;
 }
 
+// ---------- Sugestão de assunto (autocomplete) ----------
+//
+// Toda vez que o usuário digita e efetivamente usa um assunto (ao iniciar
+// um estudo), ele fica guardado numa lista própria (storage.js), independente
+// do histórico de sessões — assim o autocomplete continua sugerindo um
+// assunto mesmo que, futuramente, todas as sessões dele sejam apagadas do
+// histórico. A comparação usa normalizeForPrefixMatch (cycles.js): mesma
+// ideia de normalizeSubjectKey, mas sem o fallback para "Estudo geral".
+
+/**
+ * Registra um assunto na lista de sugestões, caso ainda não exista um
+ * equivalente (mesma normalização) — evita acumular "Matemática",
+ * "matemática" e "MATEMÁTICA" como três entradas diferentes; mantém a
+ * primeira grafia usada. Texto vazio/só espaços não é registrado.
+ * @param {string} subject
+ */
+export async function registerKnownSubject(subject) {
+  const trimmed = (subject || '').trim();
+  if (!trimmed) return;
+
+  const known = await loadKnownSubjects();
+  const normalized = normalizeForPrefixMatch(trimmed);
+  const alreadyKnown = known.some((s) => normalizeForPrefixMatch(s) === normalized);
+  if (alreadyKnown) return;
+
+  known.push(trimmed);
+  await saveKnownSubjects(known);
+}
+
+/**
+ * Sugestões de assunto para autocomplete, filtradas pelo texto já digitado.
+ * Combina a lista de assuntos registrados (ver registerKnownSubject) com os
+ * assuntos que já aparecem no histórico de sessões (cobre o caso de um
+ * histórico importado, ou de sessões criadas antes deste sistema existir) —
+ * duplicados (mesmo assunto nas duas origens) contam uma única vez.
+ * @param {string} query - texto digitado até agora
+ * @param {number} [limit=8]
+ * @returns {Promise<Array<string>>}
+ */
+export async function getSubjectSuggestions(query, limit = 8) {
+  const [known, sessions] = await Promise.all([loadKnownSubjects(), _loadNormalizedSessions()]);
+  const historySubjects = sessions.map((s) => s.subject).filter(Boolean);
+  return filterKnownSubjects([...known, ...historySubjects], query, limit);
+}
+
 // ---------- Consulta ----------
 
 /** @returns {Promise<Array<Object>>} todos os períodos já registrados, de todos os dias (já normalizados) */
@@ -231,17 +280,26 @@ export async function getTodaySessions() {
  *
  * @param {number} [days=7]
  * @param {number} [referenceCycleMs=50min]
+ * @param {string|null} [subjectFilter] - quando informado, considera só as
+ *   sessões cujo assunto corresponde (via normalizeSubjectKey — mesma regra
+ *   de "Matemática" == " matemática" == "MATEMÁTICA" usada no histórico),
+ *   permitindo um gráfico de "estudo personalizado" filtrado por assunto.
+ *   null/omitido = todos os assuntos ("estudo geral").
  * @returns {Promise<Array<ReturnType<typeof computeDailySummary> & {dateKey: string}>>}
  */
-export async function getLastNDaysSummary(days = 7, referenceCycleMs = DEFAULT_REFERENCE_CYCLE_MS) {
+export async function getLastNDaysSummary(days = 7, referenceCycleMs = DEFAULT_REFERENCE_CYCLE_MS, subjectFilter = null) {
   const sessions = await _loadNormalizedSessions();
+  const normalizedFilter = subjectFilter ? normalizeSubjectKey(subjectFilter) : null;
   const today = new Date();
   const result = [];
 
   for (let i = days - 1; i >= 0; i--) {
     const date = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i);
     const dateKey = _toDateKey(date);
-    const daySessions = sessions.filter((s) => s.date === dateKey);
+    let daySessions = sessions.filter((s) => s.date === dateKey);
+    if (normalizedFilter) {
+      daySessions = daySessions.filter((s) => normalizeSubjectKey(s.subject) === normalizedFilter);
+    }
     const summary = computeDailySummary(daySessions, referenceCycleMs);
     result.push({ dateKey, ...summary });
   }

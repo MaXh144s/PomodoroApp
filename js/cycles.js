@@ -124,6 +124,56 @@ export function countDistinctCycles(sessions) {
 }
 
 /**
+ * Normaliza um texto para comparação por PREFIXO (autocomplete de assunto):
+ * mesma ideia de normalizeSubjectKey (remove acentuação, colapsa espaços,
+ * ignora caixa) mas SEM o fallback para "Estudo geral" — aqui uma string
+ * vazia deve continuar vazia, para que "nada digitado ainda" não vire
+ * candidata a match de tudo.
+ * @param {string} [text]
+ * @returns {string}
+ */
+export function normalizeForPrefixMatch(text) {
+  return (text || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Filtra uma lista de assuntos já registrados, mantendo só os que começam
+ * (por prefixo, sem acento/caixa) pelo texto digitado — base do autocomplete
+ * de "assuntos conhecidos": digitar "p" sugere "Programação", "Probabilidade",
+ * "Paralelismo"; "pr" mantém "Programação" e "Probabilidade"; "prog" sugere
+ * só "Programação". Texto vazio não sugere nada (evita listar tudo à toa).
+ * Assuntos duplicados (mesma normalização, ex.: digitados com grafias
+ * diferentes em ocasiões distintas) aparecem uma única vez, mantendo a
+ * primeira grafia encontrada na lista.
+ * @param {Array<string>} knownSubjects
+ * @param {string} query
+ * @param {number} [limit=8]
+ * @returns {Array<string>}
+ */
+export function filterKnownSubjects(knownSubjects, query, limit = 8) {
+  const normalizedQuery = normalizeForPrefixMatch(query);
+  if (!normalizedQuery) return [];
+
+  const seen = new Set();
+  const results = [];
+
+  for (const subject of knownSubjects) {
+    const normalized = normalizeForPrefixMatch(subject);
+    if (!normalized.startsWith(normalizedQuery) || seen.has(normalized)) continue;
+    seen.add(normalized);
+    results.push(subject.trim());
+    if (results.length >= limit) break;
+  }
+
+  return results;
+}
+
+/**
  * Normaliza um texto de assunto SÓ para fins de agrupamento (nunca para
  * exibição): remove acentuação, colapsa espaços duplicados/nas pontas e
  * ignora maiúsculas/minúsculas. Assim "Matemática", " matemática" e

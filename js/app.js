@@ -19,6 +19,8 @@ import {
   buildHistoryBackup,
   validateHistoryBackup,
   commitHistoryImport,
+  registerKnownSubject,
+  getSubjectSuggestions,
 } from './history.js';
 import { computeCycleProgress, computeEquivalentCycles, formatDuration, formatCycleCount, normalizeSubjectKey } from './cycles.js';
 import {
@@ -31,6 +33,8 @@ import {
   CycleTransitionMode,
   isValidCycleTransitionMode,
   DEFAULT_SHOW_SUBJECT_IN_TIMER,
+  TodayTotalScope,
+  isValidTodayTotalScope,
 } from './preferences.js';
 import { loadPreferences, savePreferences, loadCustomSound, saveCustomSound, clearCustomSound, saveTheme } from './storage.js';
 import { setAlertCustomSound, setAlertMaxDuration, playPreview, stopPreview, seekPreview, getAudioDuration, getAudioWaveform } from './sound.js';
@@ -51,11 +55,21 @@ const CHART_TRACK_HEIGHT_PX = 160;
 // horas encadeando sessões, e "Estudado hoje" acabava travando. Agora só é
 // recalculado quando muda de fato: ao entrar em estudo/descanso e quando uma
 // sessão é salva.
-let todayBaseMs = 0;
+let todayBaseMs = 0; // total do dia, somando todos os assuntos
+let todayBaseMsForCurrentSubject = 0; // total do dia, só do assunto do ciclo atual (ver TodayTotalScope)
 
 async function refreshTodayBase() {
   const summary = await getTodaySummary();
   todayBaseMs = summary.totalStudiedMs;
+
+  // `summary.subjects` já vem agrupado por assunto (ver aggregateSessionsBySubject
+  // em cycles.js); localizamos o grupo do assunto do ciclo atual pela mesma
+  // chave normalizada usada em todo o resto do app, para não depender de
+  // digitação idêntica. Sem sessão salva ainda hoje para esse assunto, o
+  // total é 0 (ex: primeiro ciclo do dia, ou assunto que mudou agora).
+  const subjectKey = normalizeSubjectKey(app.getCurrentSubject());
+  const subjectEntry = summary.subjects.find((s) => s.subjectKey === subjectKey);
+  todayBaseMsForCurrentSubject = subjectEntry ? subjectEntry.totalStudiedMs : 0;
 }
 
 // ---------- Referências de DOM ----------
@@ -111,7 +125,13 @@ const el = {
   btnImportHistoryConfirm: document.getElementById('btn-import-history-confirm'),
 
   btnChartBack: document.getElementById('btn-chart-back'),
+  chartTitle: document.getElementById('chart-title'),
+  chartScopeButtons: Array.from(document.querySelectorAll('#chart-scope [data-chart-scope]')),
+  chartSubjectField: document.getElementById('chart-subject-field'),
+  chartSubjectInput: document.getElementById('chart-subject-input'),
+  chartSubjectSuggestions: document.getElementById('chart-subject-suggestions'),
   chartPlotInner: document.getElementById('chart-plot-inner'),
+  chartAxis: document.getElementById('chart-axis'),
   chartGridlines: document.getElementById('chart-gridlines'),
   chartBars: document.getElementById('chart-bars'),
   chartGoalLine: document.getElementById('chart-goal-line'),
@@ -136,6 +156,7 @@ const el = {
 
   prefTransitionModeButtons: Array.from(document.querySelectorAll('#pref-transition-mode [data-transition-mode]')),
   prefShowSubjectButtons: Array.from(document.querySelectorAll('#pref-show-subject [data-show-subject]')),
+  prefTodayTotalScopeButtons: Array.from(document.querySelectorAll('#pref-today-total-scope [data-today-total-scope]')),
 
   prefSoundFile: document.getElementById('pref-sound-file'),
   prefSoundCurrent: document.getElementById('pref-sound-current'),
@@ -153,6 +174,7 @@ const el = {
   inputStudy: document.getElementById('input-study'),
   inputRest: document.getElementById('input-rest'),
   inputSubject: document.getElementById('input-subject'),
+  subjectSuggestions: document.getElementById('subject-suggestions'),
 
   btnTimerHome: document.getElementById('btn-timer-home'),
   timerState: document.getElementById('timer-state'),
@@ -304,6 +326,7 @@ function renderPreferencesForm() {
   el.prefAlarmDuration.value = currentPreferences.alarmDurationSeconds;
   _setTransitionModeButtonsState(currentPreferences.cycleTransitionMode);
   _setShowSubjectButtonsState(currentPreferences.showSubjectInTimer);
+  _setTodayTotalScopeButtonsState(currentPreferences.todayTotalScope);
   updatePreferencesWarning();
 
   pendingCustomSound = undefined; // usuário ainda não mexeu no som nesta visita ao formulário
@@ -589,6 +612,25 @@ el.prefShowSubjectButtons.forEach((btn) => {
   });
 });
 
+// Mesmo padrão dos dois toggles acima, para escolher se "Estudado hoje" no
+// cronômetro soma todos os assuntos do dia ou só o do ciclo atual.
+function _setTodayTotalScopeButtonsState(scope) {
+  el.prefTodayTotalScopeButtons.forEach((btn) => {
+    btn.setAttribute('aria-pressed', String(btn.dataset.todayTotalScope === scope));
+  });
+}
+
+function _selectedTodayTotalScope() {
+  const active = el.prefTodayTotalScopeButtons.find((btn) => btn.getAttribute('aria-pressed') === 'true');
+  return active ? active.dataset.todayTotalScope : TodayTotalScope.ALL;
+}
+
+el.prefTodayTotalScopeButtons.forEach((btn) => {
+  btn.addEventListener('click', () => {
+    _setTodayTotalScopeButtonsState(btn.dataset.todayTotalScope);
+  });
+});
+
 el.trimRange.addEventListener('input', () => {
   pendingTrimStartSeconds = Number(el.trimRange.value) || 0;
   _renderTrimVisual(pendingTrimStartSeconds, _formAlarmDurationSeconds(), pendingAudioDurationSeconds || 0);
@@ -630,6 +672,7 @@ el.preferencesForm.addEventListener('submit', async (event) => {
   const alarmDurationSeconds = clampAlarmDurationSeconds(Number(el.prefAlarmDuration.value));
   const cycleTransitionMode = _selectedTransitionMode();
   const showSubjectInTimer = _selectedShowSubject();
+  const todayTotalScope = _selectedTodayTotalScope();
 
   if (
     !(defaultStudyMinutes > 0)
@@ -638,9 +681,10 @@ el.preferencesForm.addEventListener('submit', async (event) => {
     || !(ratioRestPart > 0)
     || !isValidAlarmDurationSeconds(alarmDurationSeconds)
     || !isValidCycleTransitionMode(cycleTransitionMode)
+    || !isValidTodayTotalScope(todayTotalScope)
   ) return;
 
-  currentPreferences = { defaultStudyMinutes, dailyGoalMinutes, ratioStudyPart, ratioRestPart, alarmDurationSeconds, cycleTransitionMode, showSubjectInTimer };
+  currentPreferences = { defaultStudyMinutes, dailyGoalMinutes, ratioStudyPart, ratioRestPart, alarmDurationSeconds, cycleTransitionMode, showSubjectInTimer, todayTotalScope };
   await savePreferences(currentPreferences);
   setAlertMaxDuration(alarmDurationSeconds * 1000);
   app.setCycleTransitionMode(cycleTransitionMode);
@@ -833,15 +877,18 @@ const btnHistoryCompactToggle = document.createElement('button');
 btnHistoryCompactToggle.type = 'button';
 btnHistoryCompactToggle.className = 'history-compact-toggle';
 btnHistoryCompactToggle.setAttribute('aria-pressed', 'false');
-btnHistoryCompactToggle.innerHTML = '<span class="history-compact-toggle-label">Minimizar</span><span class="history-compact-toggle-icon">▾</span>';
+btnHistoryCompactToggle.setAttribute('aria-label', 'Minimizar histórico');
+btnHistoryCompactToggle.title = 'Minimizar';
+btnHistoryCompactToggle.innerHTML = '<span class="history-compact-toggle-icon">▾</span>';
 btnHistoryCompactToggle.addEventListener('click', () => {
   historyCompactMode = !historyCompactMode;
   btnHistoryCompactToggle.setAttribute('aria-pressed', String(historyCompactMode));
-  btnHistoryCompactToggle.querySelector('.history-compact-toggle-label').textContent =
-    historyCompactMode ? 'Expandir' : 'Minimizar';
+  const label = historyCompactMode ? 'Expandir histórico' : 'Minimizar histórico';
+  btnHistoryCompactToggle.setAttribute('aria-label', label);
+  btnHistoryCompactToggle.title = historyCompactMode ? 'Expandir' : 'Minimizar';
   el.homeHistoryList.classList.toggle('history-list-compact', historyCompactMode);
 });
-(el.homeHistory.querySelector('.history-card-header') || el.homeHistory).appendChild(btnHistoryCompactToggle);
+(el.homeHistory.querySelector('.history-card-header-top') || el.homeHistory).appendChild(btnHistoryCompactToggle);
 
 function _renderHistoryList() {
   const fullHistory = lastFullHistorySummary;
@@ -958,7 +1005,8 @@ el.btnHistoryTrash.addEventListener('click', () => {
   if (historySelectionMode && historyCompactMode) {
     historyCompactMode = false;
     btnHistoryCompactToggle.setAttribute('aria-pressed', 'false');
-    btnHistoryCompactToggle.querySelector('.history-compact-toggle-label').textContent = 'Minimizar';
+    btnHistoryCompactToggle.setAttribute('aria-label', 'Minimizar histórico');
+    btnHistoryCompactToggle.title = 'Minimizar';
     el.homeHistoryList.classList.remove('history-list-compact');
   }
 
@@ -1158,12 +1206,68 @@ el.btnImportHistoryConfirm.addEventListener('click', async () => {
 const WEEKDAY_LABELS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 const CHART_GRIDLINE_RATIOS = [0.25, 0.5, 0.75]; // linhas de referência, puramente decorativas
 
+// Escopo do gráfico: "all" soma todos os assuntos do dia (comportamento
+// histórico); "subject" filtra pelo texto digitado em chartSubjectQuery,
+// usando a mesma normalização de assunto do histórico (normalizeSubjectKey,
+// aplicada dentro de getLastNDaysSummary em history.js) — assim "matemática",
+// " Matemática" e "MATEMÁTICA" contam como a mesma correspondência.
+let chartScope = 'all';
+let chartSubjectQuery = '';
+
+function _setChartScope(scope) {
+  if (scope === chartScope) return;
+  chartScope = scope;
+  el.chartScopeButtons.forEach((btn) => {
+    btn.setAttribute('aria-pressed', String(btn.dataset.chartScope === scope));
+  });
+  el.chartSubjectField.hidden = scope !== 'subject';
+  if (scope === 'subject') el.chartSubjectInput.focus();
+}
+
+el.chartScopeButtons.forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    _setChartScope(btn.dataset.chartScope);
+    await renderChart();
+  });
+});
+
+el.chartSubjectInput.addEventListener('input', async () => {
+  chartSubjectQuery = el.chartSubjectInput.value;
+  await renderChart();
+});
+
 async function renderChart() {
-  const days = await getLastNDaysSummary(7);
+  const trimmedSubject = chartSubjectQuery.trim();
+  const isSubjectScope = chartScope === 'subject';
+  const subjectFilter = isSubjectScope && trimmedSubject ? trimmedSubject : null;
+
+  el.chartTitle.textContent = subjectFilter
+    ? `Tempo estudado em "${trimmedSubject}" por dia`
+    : 'Tempo estudado por dia';
+
+  // Modo personalizado sem nada digitado ainda: não faz sentido mostrar o
+  // gráfico geral por baixo (confundiria com o resultado de uma busca vazia)
+  // nem um gráfico "zerado" — só um convite claro para digitar o assunto.
+  if (isSubjectScope && !trimmedSubject) {
+    _hideChartTooltip();
+    el.chartAxis.hidden = true;
+    el.chartBars.innerHTML = '<p class="chart-empty">Digite o nome de um assunto para ver o estudo personalizado.</p>';
+    el.chartTotal.textContent = '';
+    el.chartGoalLine.hidden = true;
+    el.chartAvgLine.hidden = true;
+    el.chartGoalTag.hidden = true;
+    el.chartAvgTag.hidden = true;
+    el.chartGridlines.innerHTML = '';
+    return;
+  }
+
+  const days = await getLastNDaysSummary(7, undefined, subjectFilter);
   const totals = days.map((d) => d.totalStudiedMs);
 
   // Meta diária definida em Preferências (0 = sem meta, linha fica escondida).
-  const goalMinutes = currentPreferences.dailyGoalMinutes || 0;
+  // No modo personalizado a meta não se aplica (ela é do dia inteiro, não de
+  // um assunto específico), então a linha fica sempre oculta nesse caso.
+  const goalMinutes = !subjectFilter ? (currentPreferences.dailyGoalMinutes || 0) : 0;
   const goalMs = goalMinutes > 0 ? goalMinutes * 60 * 1000 : 0;
 
   // A meta entra no cálculo do teto do gráfico (maxMs) para que a linha de
@@ -1174,7 +1278,11 @@ async function renderChart() {
   _hideChartTooltip();
 
   if (maxMs === 0) {
-    el.chartBars.innerHTML = '<p class="chart-empty">Nenhum estudo registrado nos últimos 7 dias.</p>';
+    const emptyMessage = subjectFilter
+      ? `Nenhum estudo de "${trimmedSubject}" registrado nos últimos 7 dias.`
+      : 'Nenhum estudo registrado nos últimos 7 dias.';
+    el.chartAxis.hidden = true;
+    el.chartBars.innerHTML = `<p class="chart-empty">${emptyMessage}</p>`;
     el.chartTotal.textContent = '';
     el.chartGoalLine.hidden = true;
     el.chartAvgLine.hidden = true;
@@ -1184,6 +1292,7 @@ async function renderChart() {
     return;
   }
 
+  el.chartAxis.hidden = false;
   el.chartGridlines.innerHTML = CHART_GRIDLINE_RATIOS
     .map((ratio) => `<div class="chart-gridline" style="top: ${(1 - ratio) * 100}%"></div>`)
     .join('');
@@ -1283,6 +1392,68 @@ el.btnChart.addEventListener('click', async () => {
 });
 
 el.btnChartBack.addEventListener('click', () => showView('home', 'backward'));
+
+// ---------- Autocomplete de assunto (sugestões) ----------
+//
+// Um único comportamento reaproveitado nos dois lugares onde o usuário
+// digita um assunto: o campo de assunto ao iniciar um estudo (Configuração)
+// e o filtro "Estudo personalizado" (Gráfico). Conforme a pessoa digita,
+// mostra os assuntos já conhecidos (ver registerKnownSubject/
+// getSubjectSuggestions em history.js) que combinam por prefixo — "p" sugere
+// "Programação", "Probabilidade", "Paralelismo"; "pr" mantém as duas
+// primeiras; "prog" só "Programação".
+function _attachSubjectAutocomplete(inputEl, listEl, onPick) {
+  function _hideSuggestions() {
+    listEl.hidden = true;
+    listEl.innerHTML = '';
+  }
+
+  async function _refreshSuggestions() {
+    const query = inputEl.value;
+    const suggestions = await getSubjectSuggestions(query);
+    if (suggestions.length === 0) {
+      _hideSuggestions();
+      return;
+    }
+    listEl.innerHTML = suggestions
+      .map((subject) => `<li><button type="button" class="subject-suggestion">${subject}</button></li>`)
+      .join('');
+    listEl.hidden = false;
+  }
+
+  // mousedown (em vez de click) + preventDefault: dispara ANTES do blur do
+  // input, então a seleção acontece sem o campo perder o foco no meio do
+  // caminho (o que faria o dropdown fechar antes do clique ser processado).
+  listEl.addEventListener('mousedown', (event) => {
+    const button = event.target.closest('.subject-suggestion');
+    if (!button) return;
+    event.preventDefault();
+    inputEl.value = button.textContent;
+    _hideSuggestions();
+    onPick?.(button.textContent);
+  });
+
+  inputEl.addEventListener('input', _refreshSuggestions);
+  inputEl.addEventListener('focus', _refreshSuggestions);
+  // Pequeno atraso: cobre o caso (ex: toque em telas sensíveis) em que o
+  // blur dispara antes do listener de mousedown acima ter processado o clique.
+  inputEl.addEventListener('blur', () => setTimeout(_hideSuggestions, 150));
+  inputEl.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') _hideSuggestions();
+  });
+}
+
+// Campo de assunto ao iniciar um estudo: só preenche o próprio campo ao
+// escolher uma sugestão, sem nenhum efeito colateral adicional.
+_attachSubjectAutocomplete(el.inputSubject, el.subjectSuggestions);
+
+// Campo de assunto do gráfico personalizado: escolher uma sugestão precisa
+// também atualizar o filtro e re-renderizar o gráfico (equivalente a digitar
+// o texto inteiro), já que o clique não passa pelo input normal do usuário.
+_attachSubjectAutocomplete(el.chartSubjectInput, el.chartSubjectSuggestions, async (subject) => {
+  chartSubjectQuery = subject;
+  await renderChart();
+});
 
 // ---------- Configuração ----------
 
@@ -1395,6 +1566,7 @@ el.configForm.addEventListener('submit', async (event) => {
 
   restManuallyEdited = false;
   _requestNotificationPermissionIfNeeded();
+  await registerKnownSubject(el.inputSubject.value);
   await app.configure(studyMin * 60 * 1000, restMin * 60 * 1000, el.inputSubject.value);
   app.startStudy();
 });
@@ -1511,9 +1683,14 @@ function renderCycleInfo() {
     ? `${progress.completeCycles} ciclo(s) + ${formatCycleCount(progress.partialFraction, 2)} concluído`
     : `${formatCycleCount(progress.partialFraction, 2)} ciclo concluído`;
 
-  // todayBaseMs já inclui todos os períodos gravados (inclusive de pausas
-  // anteriores deste mesmo ciclo); só falta somar o período em execução agora.
-  el.timerTodayTotal.textContent = `Estudado hoje: ${formatDuration(todayBaseMs + app.getOpenRunPeriodTodayMs())}`;
+  // todayBaseMs/todayBaseMsForCurrentSubject já incluem todos os períodos
+  // gravados (inclusive de pausas anteriores deste mesmo ciclo); só falta
+  // somar o período em execução agora — que é sempre do assunto atual, então
+  // soma certo nos dois escopos.
+  const isSubjectScope = currentPreferences.todayTotalScope === TodayTotalScope.SUBJECT;
+  const todayBase = isSubjectScope ? todayBaseMsForCurrentSubject : todayBaseMs;
+  const todayLabel = isSubjectScope ? `Estudado hoje de ${app.getCurrentSubject()}` : 'Estudado hoje';
+  el.timerTodayTotal.textContent = `${todayLabel}: ${formatDuration(todayBase + app.getOpenRunPeriodTodayMs())}`;
 }
 
 function updateToggleButtonLabel() {

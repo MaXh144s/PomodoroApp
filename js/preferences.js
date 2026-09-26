@@ -16,7 +16,7 @@ export const DEFAULT_ALARM_DURATION_SECONDS = 10; // tempo máximo que o alarme 
 export const MIN_ALARM_DURATION_SECONDS = 3;
 export const MAX_ALARM_DURATION_SECONDS = 60;
 export const DEFAULT_DAILY_GOAL_MINUTES = 0; // 0 = sem meta definida (nenhuma linha de meta aparece no gráfico)
-export const DEFAULT_SHOW_SUBJECT_IN_TIMER = false; // exibe o assunto do ciclo abaixo do estado (ESTUDO/DESCANSO) no cronômetro
+export const DEFAULT_SHOW_SUBJECT_IN_TIMER = true; // exibe o assunto do ciclo abaixo do estado (ESTUDO/DESCANSO) no cronômetro
 
 /**
  * Modo de transição entre ciclos (estudo <-> descanso) ao fim do alarme:
@@ -43,6 +43,30 @@ export const DEFAULT_CYCLE_TRANSITION_MODE = CycleTransitionMode.AUTOMATIC;
  */
 export function isValidCycleTransitionMode(mode) {
   return mode === CycleTransitionMode.AUTOMATIC || mode === CycleTransitionMode.MANUAL;
+}
+
+/**
+ * Escopo do tempo mostrado em "Estudado hoje" no cronômetro:
+ * - ALL: soma o tempo estudado hoje em TODOS os assuntos (comportamento
+ *   histórico do app).
+ * - SUBJECT: mostra só o tempo estudado hoje no assunto do ciclo atual —
+ *   útil para quem estuda mais de uma matéria no mesmo dia e quer ver o
+ *   progresso separado por assunto, não misturado com os outros.
+ */
+export const TodayTotalScope = Object.freeze({
+  ALL: 'all',
+  SUBJECT: 'subject',
+});
+
+export const DEFAULT_TODAY_TOTAL_SCOPE = TodayTotalScope.ALL;
+
+/**
+ * Valida se um valor é um escopo de "Estudado hoje" reconhecido.
+ * @param {string} scope
+ * @returns {boolean}
+ */
+export function isValidTodayTotalScope(scope) {
+  return scope === TodayTotalScope.ALL || scope === TodayTotalScope.SUBJECT;
 }
 
 /** Presets de duração de estudo oferecidos na tela de Configurações. */
@@ -73,7 +97,7 @@ export function clampAlarmDurationSeconds(seconds) {
   return Math.min(MAX_ALARM_DURATION_SECONDS, Math.max(MIN_ALARM_DURATION_SECONDS, seconds));
 }
 
-/** @returns {{ratioStudyPart: number, ratioRestPart: number, defaultStudyMinutes: number, alarmDurationSeconds: number, dailyGoalMinutes: number, cycleTransitionMode: string, showSubjectInTimer: boolean}} */
+/** @returns {{ratioStudyPart: number, ratioRestPart: number, defaultStudyMinutes: number, alarmDurationSeconds: number, dailyGoalMinutes: number, cycleTransitionMode: string, showSubjectInTimer: boolean, todayTotalScope: string}} */
 export function getDefaultPreferences() {
   return {
     ratioStudyPart: DEFAULT_RATIO_STUDY_PART,
@@ -83,6 +107,7 @@ export function getDefaultPreferences() {
     dailyGoalMinutes: DEFAULT_DAILY_GOAL_MINUTES,
     cycleTransitionMode: DEFAULT_CYCLE_TRANSITION_MODE,
     showSubjectInTimer: DEFAULT_SHOW_SUBJECT_IN_TIMER,
+    todayTotalScope: DEFAULT_TODAY_TOTAL_SCOPE,
   };
 }
 
